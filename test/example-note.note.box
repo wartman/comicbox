@@ -1,0 +1,8 @@
+[Note]
+  title = Example Notes
+
+[Section id=about]
+  [Header] About Notes
+
+  Notes can be anything! In Boxup Comic, they're designed to feel
+  a lot like markdown.

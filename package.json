@@ -1,0 +1,21 @@
+{
+  "name": "comicbox",
+  "publisher": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.4.0"
+  },
+  "main": "dist/extension.js",
+  "activationEvents": [
+    "onLanguage:box",
+    "onCommand:comicbox.compile"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "comicbox.compile",
+        "title": "Compile the current file"
+      }
+    ]
+  }
+}

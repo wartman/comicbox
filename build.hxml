@@ -1,0 +1,18 @@
+-cp src
+
+-lib boxup
+-lib vscode
+-lib hxnodejs
+-lib capsule
+
+-dce full
+
+-D js-es=6
+-D analyzer-optimize
+
+-resource res/comic.definition.box@comic
+-resource res/note.definition.box@note
+
+ComicboxExtension
+
+-js dist/extension.js

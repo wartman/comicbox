@@ -1,0 +1,40 @@
+[Root]
+  [Child name=Note required=true multiple=false]
+  [Child name=Section]
+  [Child name=Header]
+  [Child name=Paragraph]
+  [Child name=Link]
+  [Child name=List]
+
+[Block name=Note]
+  [Property name=title required=true]
+  [Property name=version]
+
+[Block name=Paragraph kind=Paragraph]
+  [Child name=Link]
+  [Child name=Detail]
+
+[Block name=Link kind=Tag]
+  [Property name=url required=true]
+
+[Block name=Detail kind=Tag]
+  [Child name=Paragraph]
+
+[Block name=Section]
+  [Property name=id]
+  [Property name=title]
+  [Child name=Header]
+  [Child name=Paragraph]
+  [Child name=List]
+
+[Block name=Header kind=Tag]
+  [Child name=Paragraph]
+
+[Block name=List]
+  [EnumProperty name=type]
+    [Option value=Ordered]
+    [Option value=Unordered]
+  [Child name=Item required=true]
+
+[Block name=Item kind=Arrow]
+  [Child name=Paragraph]

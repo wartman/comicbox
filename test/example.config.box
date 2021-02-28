@@ -1,0 +1,4 @@
+[Project]
+  src = ./
+  dest = ./dist
+  generate = markdown

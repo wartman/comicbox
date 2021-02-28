@@ -1,0 +1,11 @@
+[Root]
+  [Child name=Project required=true multiple=false]
+
+[Block name=Project]
+  [Property name=src requried=true]
+  [Property name=dest requried=true]
+  [Property name=ignore]
+  [EnumProperty name=generate requried=true]
+    [Option value=markdown]
+    [Option value=pdf]
+    [Option value=doc]
