@@ -28,14 +28,17 @@ class PreviewPanel {
   }
 
   public function updateHtml(content:String) {
-    panel.webview.postMessage({ command: 'update', content: content });
+    panel.webview.postMessage({ command: 'updateHtml', content: content });
+  }
+
+  public function updateState(state:PreviewState) {
+    panel.webview.postMessage({ command: 'upsateState', state: state });
   }
 
   function init() {
-    panel.title = '';
+    panel.title = 'Comicbox Preview';
     panel.webview.html = render();
-    panel.webview.postMessage({ 
-      command: 'setState', 
+    updateState({ 
       uri: documentUri.toString() 
     });
   }

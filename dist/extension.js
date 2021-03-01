@@ -1899,12 +1899,15 @@ class comicbox_preview_PreviewPanel {
 		},null,this.disposables);
 	}
 	updateHtml(content) {
-		this.panel.webview.postMessage({ command : "update", content : content});
+		this.panel.webview.postMessage({ command : "updateHtml", content : content});
+	}
+	updateState(state) {
+		this.panel.webview.postMessage({ command : "upsateState", state : state});
 	}
 	init() {
-		this.panel.title = "";
+		this.panel.title = "Comicbox Preview";
 		this.panel.webview.html = this.render();
-		this.panel.webview.postMessage({ command : "setState", uri : this.documentUri.toString()});
+		this.updateState({ uri : this.documentUri.toString()});
 	}
 	dispose() {
 		HxOverrides.remove(this.manager.previews,this);
@@ -1927,7 +1930,7 @@ class comicbox_preview_PreviewSerializer {
 		this.manager = manager;
 	}
 	deserializeWebviewPanel(webviewPanel,state) {
-		let preview = new comicbox_preview_PreviewPanel(vscode_Uri.parse(state.id),this.manager,webviewPanel);
+		let preview = new comicbox_preview_PreviewPanel(vscode_Uri.parse(state.uri),this.manager,webviewPanel);
 		this.manager.addPreview(preview);
 		return Promise.resolve();
 	}

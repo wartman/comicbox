@@ -13,11 +13,12 @@
   window.addEventListener('message', event => {
     const message = event.data;
     switch (message.command) {
-      case 'update':
+      case 'updateHtml':
         target.innerHTML = message.content;
-      case 'setState':
-        if (message.uri != undefined) {
-          state.uri = message.uri;
+      case 'updateState':
+        const incoming = message.state;
+        if (incoming.uri != undefined) {
+          state.uri = incoming.uri;
         }
         vscode.setState(state);
     }

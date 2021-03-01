@@ -12,9 +12,9 @@ class PreviewSerializer {
     this.manager = manager;
   }
   
-  public function deserializeWebviewPanel(webviewPanel:WebviewPanel, state:{ id:String }):Thenable<Void> {
+  public function deserializeWebviewPanel(webviewPanel:WebviewPanel, state:PreviewState):Thenable<Void> {
     var preview = new PreviewPanel(
-      Uri.parse(state.id),
+      Uri.parse(state.uri),
       manager,
       webviewPanel
     );
