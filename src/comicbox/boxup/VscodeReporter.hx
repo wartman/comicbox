@@ -1,7 +1,7 @@
 package comicbox.boxup;
 
+import boxup.ErrorCollection;
 import boxup.Reporter;
-import boxup.Error;
 import boxup.Source;
 import comicbox.provider.DiagnosticsProvider;
 
@@ -14,7 +14,7 @@ class VscodeReporter implements Reporter {
     this.diagnostics = diagnostics;
   }
 
-  public function report(errors:Array<Error>, source:Source):Void {
+  public function report(errors:ErrorCollection, source:Source):Void {
     diagnostics.report(errors);
   }
 }

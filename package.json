@@ -8,13 +8,18 @@
   "main": "dist/extension.js",
   "activationEvents": [
     "onLanguage:box",
-    "onCommand:comicbox.compile"
+    "onCommand:comicbox.compile",
+    "onCommand:comicbox.showPreview"
   ],
   "contributes": {
     "commands": [
       {
         "command": "comicbox.compile",
-        "title": "Compile the current file"
+        "title": "Comicbox: Compile the current file"
+      },
+      {
+        "command": "comicbox.showPreview",
+        "title": "Comicbox: Show a preview of the current file"
       }
     ]
   }

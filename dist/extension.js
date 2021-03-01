@@ -3,12 +3,12 @@
 var $estr = function() { return js_Boot.__string_rec(this,''); },$hxEnums = $hxEnums || {},$_;
 function ComicboxExtension_activate(context) {
 	let container = new capsule_Container();
-	container.useServiceProvider(new capsule_Mapping("comicbox.ComicboxModule").toProvider(capsule_Provider.ProvideFactory(function(c) {
-		return new comicbox_ComicboxModule();
-	})).getValue(container));
+	container.useServiceProvider(new comicbox_ComicboxModule(vscode_Uri.parse(context.extensionUri)));
 	let docs = container.getMappingByIdentifier("comicbox.provider.DocumentProvider").getValue(container);
 	let diag = container.getMappingByIdentifier("comicbox.provider.DiagnosticsProvider").getValue(container);
+	let preview = container.getMappingByIdentifier("comicbox.preview.PreviewManager").getValue(container);
 	diag.register(context);
+	preview.register(context);
 	Vscode.workspace.onDidChangeTextDocument(function(change) {
 		if(comicbox_Util.isBoxupDocument(change.document)) {
 			diag.clear(change.document.uri);
@@ -16,13 +16,19 @@ function ComicboxExtension_activate(context) {
 		}
 	});
 	Vscode.workspace.onDidCloseTextDocument(function(document) {
-		docs.removeDocument(document.uri.toString());
+		if(comicbox_Util.isBoxupDocument(document)) {
+			docs.removeDocument(document.uri.toString());
+			diag.remove(document.uri);
+		}
 	});
 	Vscode.window.onDidChangeActiveTextEditor(function(change) {
 		if(comicbox_Util.isBoxupDocument(change.document)) {
 			docs.parseDocument(change.document);
 		}
 	});
+	context.subscriptions.push(Vscode.commands.registerCommand("comicbox.compile",function() {
+		Vscode.window.showInformationMessage("Not ready yet");
+	}));
 }
 $hx_exports["activate"] = ComicboxExtension_activate;
 class HxOverrides {
@@ -44,6 +50,14 @@ class HxOverrides {
 			}
 		}
 		return s.substr(pos,len);
+	}
+	static remove(a,obj) {
+		let i = a.indexOf(obj);
+		if(i == -1) {
+			return false;
+		}
+		a.splice(i,1);
+		return true;
 	}
 	static now() {
 		return Date.now();
@@ -71,7 +85,59 @@ class Lambda {
 }
 Lambda.__name__ = "Lambda";
 Math.__name__ = "Math";
+class Std {
+	static string(s) {
+		return js_Boot.__string_rec(s,"");
+	}
+}
+Std.__name__ = "Std";
 class StringTools {
+	static htmlEscape(s,quotes) {
+		let buf_b = "";
+		let _g_offset = 0;
+		let _g_s = s;
+		while(_g_offset < _g_s.length) {
+			let s = _g_s;
+			let index = _g_offset++;
+			let c = s.charCodeAt(index);
+			if(c >= 55296 && c <= 56319) {
+				c = c - 55232 << 10 | s.charCodeAt(index + 1) & 1023;
+			}
+			let c1 = c;
+			if(c1 >= 65536) {
+				++_g_offset;
+			}
+			let code = c1;
+			switch(code) {
+			case 34:
+				if(quotes) {
+					buf_b += "&quot;";
+				} else {
+					buf_b += String.fromCodePoint(code);
+				}
+				break;
+			case 38:
+				buf_b += "&amp;";
+				break;
+			case 39:
+				if(quotes) {
+					buf_b += "&#039;";
+				} else {
+					buf_b += String.fromCodePoint(code);
+				}
+				break;
+			case 60:
+				buf_b += "&lt;";
+				break;
+			case 62:
+				buf_b += "&gt;";
+				break;
+			default:
+				buf_b += String.fromCodePoint(code);
+			}
+		}
+		return buf_b;
+	}
 	static isSpace(s,pos) {
 		let c = HxOverrides.cca(s,pos);
 		if(!(c > 8 && c < 14)) {
@@ -113,27 +179,24 @@ class boxup_Compiler {
 		this.validator = validator;
 	}
 	compile(source) {
-		try {
-			let nodes = new boxup_Parser(source).parse();
-			if(this.validator == null) {
-				return haxe_ds_Option.Some(this.generator.generate(nodes));
-			}
-			let _g = this.validator.validate(nodes);
-			switch(_g._hx_index) {
-			case 0:
-				return haxe_ds_Option.Some(this.generator.generate(nodes));
-			case 1:
-				this.reporter.report(_g.errors,source);
-				return haxe_ds_Option.None;
-			}
-		} catch( _g ) {
-			let _g1 = haxe_Exception.caught(_g).unwrap();
-			if(((_g1) instanceof boxup_Error)) {
-				this.reporter.report([_g1],source);
-				return haxe_ds_Option.None;
+		let _gthis = this;
+		let outcome = boxup_OutcomeTools.map(boxup_OutcomeTools.map(boxup_OutcomeTools.map(source.tokens,function(tokens) {
+			return new boxup_Parser(tokens).parse();
+		}),function(nodes) {
+			if(_gthis.validator == null) {
+				return boxup_Outcome.Ok(nodes);
 			} else {
-				throw _g;
+				return _gthis.validator.validate(nodes);
 			}
+		}),function(nodes) {
+			return _gthis.generator.generate(nodes);
+		});
+		switch(outcome._hx_index) {
+		case 0:
+			return haxe_ds_Option.Some(outcome.data);
+		case 1:
+			this.reporter.report(outcome.error,source);
+			return haxe_ds_Option.None;
 		}
 	}
 }
@@ -147,7 +210,7 @@ class boxup_Error {
 		this.pos = pos;
 	}
 	toString() {
-		return "" + this.message + " : " + this.pos.file + " " + this.pos.min + "->" + this.pos.max;
+		return "" + this.message + " : " + this.pos.file + " " + this.pos.min + " " + this.pos.max;
 	}
 }
 boxup_Error.__name__ = "boxup.Error";
@@ -191,25 +254,50 @@ boxup_Node.__name__ = "boxup.Node";
 Object.assign(boxup_Node.prototype, {
 	__class__: boxup_Node
 });
+var boxup_Outcome = $hxEnums["boxup.Outcome"] = { __ename__:true,__constructs__:null
+	,Ok: ($_=function(data) { return {_hx_index:0,data:data,__enum__:"boxup.Outcome",toString:$estr}; },$_._hx_name="Ok",$_.__params__ = ["data"],$_)
+	,Fail: ($_=function(error) { return {_hx_index:1,error:error,__enum__:"boxup.Outcome",toString:$estr}; },$_._hx_name="Fail",$_.__params__ = ["error"],$_)
+};
+boxup_Outcome.__constructs__ = [boxup_Outcome.Ok,boxup_Outcome.Fail];
+class boxup_OutcomeTools {
+	static map(outcome,transform) {
+		switch(outcome._hx_index) {
+		case 0:
+			return transform(outcome.data);
+		case 1:
+			return boxup_Outcome.Fail(outcome.error);
+		}
+	}
+}
+boxup_OutcomeTools.__name__ = "boxup.OutcomeTools";
 class boxup_Parser {
-	constructor(source) {
+	constructor(tokens) {
 		this.position = 0;
-		this.tokens = new boxup_Scanner(source).scan();
+		this.tokens = tokens;
 	}
 	parse() {
 		this.position = 0;
-		let _g = [];
-		while(!this.isAtEnd()) _g.push(this.parseRoot(0));
-		let _g1 = [];
-		let _g2 = 0;
-		while(_g2 < _g.length) {
-			let v = _g[_g2];
-			++_g2;
-			if(v != null) {
-				_g1.push(v);
+		try {
+			let _g = [];
+			while(!this.isAtEnd()) _g.push(this.parseRoot(0));
+			let _g1 = [];
+			let _g2 = 0;
+			while(_g2 < _g.length) {
+				let v = _g[_g2];
+				++_g2;
+				if(v != null) {
+					_g1.push(v);
+				}
+			}
+			return boxup_Outcome.Ok(_g1);
+		} catch( _g ) {
+			let _g1 = haxe_Exception.caught(_g).unwrap();
+			if(((_g1) instanceof boxup_Error)) {
+				return boxup_Outcome.Fail([_g1]);
+			} else {
+				throw _g;
 			}
 		}
-		return _g1;
 	}
 	parseRoot(indent) {
 		if(indent == null) {
@@ -413,7 +501,7 @@ class boxup_Parser {
 	}
 	parseValue(isInBlockDecl) {
 		let _gthis = this;
-		let tok = this.match("<string>") ? this.previous() : isInBlockDecl ? boxup_TokenTools.merge(this.readWhile(function() {
+		let tok = this.match("'") ? this.parseString("'") : this.match("\"") ? this.parseString("\"") : isInBlockDecl ? boxup_TokenTools.merge(this.readWhile(function() {
 			return _gthis.check("<text>");
 		})) : boxup_TokenTools.merge(this.readWhile(function() {
 			return !_gthis.isNewline(_gthis.peek());
@@ -512,6 +600,17 @@ class boxup_Parser {
 		readNext();
 		let tok = boxup_TokenTools.merge(out);
 		return new boxup_Node(boxup_NodeType.Text,null,tok.value,[],[],tok.pos);
+	}
+	parseString(delimiter) {
+		let _gthis = this;
+		let out = boxup_TokenTools.merge(this.readWhile(function() {
+			return !_gthis.check(delimiter);
+		}));
+		if(this.isAtEnd()) {
+			throw haxe_Exception.thrown(this.error("Unterminated string",out.pos));
+		}
+		this.consume(delimiter);
+		return out;
 	}
 	isBlockStart() {
 		if(!this.check("[")) {
@@ -709,10 +808,19 @@ class boxup_Scanner {
 	scan() {
 		this.position = 0;
 		this.start = 0;
-		let _g = [];
-		while(!this.isAtEnd()) _g.push(this.scanToken());
-		_g.push({ type : "<eof>", value : "", pos : { min : this.position, max : this.position, file : this.source.filename}});
-		return _g;
+		try {
+			let _g = [];
+			while(!this.isAtEnd()) _g.push(this.scanToken());
+			_g.push({ type : "<eof>", value : "", pos : { min : this.position, max : this.position, file : this.source.filename}});
+			return boxup_Outcome.Ok(_g);
+		} catch( _g ) {
+			let _g1 = haxe_Exception.caught(_g).unwrap();
+			if(((_g1) instanceof boxup_Error)) {
+				return boxup_Outcome.Fail([_g1]);
+			} else {
+				throw _g;
+			}
+		}
 	}
 	scanToken() {
 		this.start = this.position;
@@ -733,9 +841,9 @@ class boxup_Scanner {
 		case " ":
 			return this.createToken("<whitespace>");
 		case "\"":
-			return this.string("\"");
+			return this.createToken("\"");
 		case "'":
-			return this.string("'");
+			return this.createToken("'");
 		case "*":
 			return this.createToken("*");
 		case "-":
@@ -767,7 +875,7 @@ class boxup_Scanner {
 			}
 			break;
 		case "\\":
-			return this.createToken("<text>","\\" + this.advance());
+			return this.createToken("<text>",this.advance());
 		case "]":
 			return this.createToken("]");
 		case "_":
@@ -782,19 +890,6 @@ class boxup_Scanner {
 	}
 	createToken(type,value) {
 		return { type : type, value : value == null ? this.previous() : value, pos : { file : this.source.filename, min : this.start, max : this.position}};
-	}
-	string(delimiter) {
-		let out = "";
-		while(!this.isAtEnd() && !this.match(delimiter)) {
-			out += this.advance();
-			if(this.previous() == "\\" && !this.isAtEnd()) {
-				out += "\\" + this.advance();
-			}
-		}
-		if(this.isAtEnd()) {
-			throw haxe_Exception.thrown(this.error("Unterminated string",this.start,this.position));
-		}
-		return { type : "<string>", value : out, pos : { file : this.source.filename, min : this.start, max : this.position}};
 	}
 	match(value) {
 		if(this.check(value)) {
@@ -864,6 +959,7 @@ class boxup_Source {
 	constructor(filename,content) {
 		this.filename = filename;
 		this.content = content;
+		this.tokens = new boxup_Scanner(this).scan();
 	}
 }
 boxup_Source.__name__ = "boxup.Source";
@@ -903,11 +999,6 @@ class boxup_TokenTools {
 	}
 }
 boxup_TokenTools.__name__ = "boxup.TokenTools";
-var boxup_ValidationResult = $hxEnums["boxup.ValidationResult"] = { __ename__:true,__constructs__:null
-	,Passed: {_hx_name:"Passed",_hx_index:0,__enum__:"boxup.ValidationResult",toString:$estr}
-	,Failed: ($_=function(errors) { return {_hx_index:1,errors:errors,__enum__:"boxup.ValidationResult",toString:$estr}; },$_._hx_name="Failed",$_.__params__ = ["errors"],$_)
-};
-boxup_ValidationResult.__constructs__ = [boxup_ValidationResult.Passed,boxup_ValidationResult.Failed];
 class boxup_cli_Definition {
 	constructor(blocks) {
 		this.blocks = blocks;
@@ -919,7 +1010,9 @@ class boxup_cli_Definition {
 	}
 	validate(nodes) {
 		let first = nodes[0];
-		return this.getBlock("@root").validate(new boxup_Node(boxup_NodeType.Block("@root"),null,null,[],nodes,{ min : 0, max : 0, file : first.pos.file}),this);
+		return boxup_OutcomeTools.map(this.getBlock("@root").validate(new boxup_Node(boxup_NodeType.Block("@root"),null,null,[],nodes,{ min : 0, max : 0, file : first.pos.file}),this),function(_) {
+			return boxup_Outcome.Ok(nodes);
+		});
 	}
 }
 boxup_cli_Definition.__name__ = "boxup.cli.Definition";
@@ -946,9 +1039,9 @@ class boxup_cli_BlockDefinition {
 		return this.kind == "Arrow";
 	}
 	validate(node,definition) {
+		let _gthis = this;
 		let errors = [];
 		let existingChildren = [];
-		let _gthis = this;
 		switch(this.kind) {
 		case "Arrow":case "Normal":case "Tag":
 			try {
@@ -988,12 +1081,8 @@ class boxup_cli_BlockDefinition {
 			} else {
 				existingChildren.push(name);
 				let _g = block.validate(child,definition);
-				switch(_g._hx_index) {
-				case 0:
-					break;
-				case 1:
-					errors = errors.concat(_g.errors);
-					break;
+				if(_g._hx_index == 1) {
+					errors = errors.concat(_g.error);
 				}
 			}
 		};
@@ -1056,9 +1145,9 @@ class boxup_cli_BlockDefinition {
 			}
 		}
 		if(errors.length > 0) {
-			return boxup_ValidationResult.Failed(errors);
+			return boxup_Outcome.Fail(errors);
 		} else {
-			return boxup_ValidationResult.Passed;
+			return boxup_Outcome.Ok(node);
 		}
 	}
 	validateProps(node) {
@@ -1334,7 +1423,7 @@ class boxup_cli_DefinitionGenerator {
 				}
 			}
 		}
-		return new boxup_cli_Definition(blocks);
+		return boxup_Outcome.Ok(new boxup_cli_Definition(blocks));
 	}
 }
 boxup_cli_DefinitionGenerator.__name__ = "boxup.cli.DefinitionGenerator";
@@ -1401,6 +1490,10 @@ class capsule_Mapping {
 	constructor(identifier,provider) {
 		this.identifier = identifier;
 		this.provider = provider == null ? capsule_Provider.ProvideNone : provider;
+	}
+	toValue(value) {
+		this.toProvider(capsule_Provider.ProvideValue(value));
+		return this;
 	}
 	toProvider(provider) {
 		this.checkProvider();
@@ -1544,25 +1637,35 @@ Object.assign(capsule_ProviderDoesNotExistException.prototype, {
 	__class__: capsule_ProviderDoesNotExistException
 });
 class comicbox_ComicboxModule {
-	constructor() {
+	constructor(extensionUri) {
+		this.extensionUri = extensionUri;
 	}
 	register(container) {
+		container.addMapping(new capsule_Mapping("vscode.Uri" + "#" + "comicbox.uri")).toValue(this.extensionUri).asShared();
 		let tmp = capsule_Provider.ProvideFactory(function(c) {
 			return new comicbox_boxup_VscodeReporter(c.getMappingByIdentifier("comicbox.provider.DiagnosticsProvider").getValue(c));
 		});
 		container.addMapping(new capsule_Mapping("boxup.Reporter")).toProvider(tmp).asShared();
 		let tmp1 = capsule_Provider.ProvideFactory(function(c) {
+			return new comicbox_generator_HtmlGenerator();
+		});
+		container.addMapping(new capsule_Mapping("comicbox.generator.HtmlGenerator")).toProvider(tmp1).asShared();
+		let tmp2 = capsule_Provider.ProvideFactory(function(c) {
 			return new comicbox_provider_DiagnosticsProvider();
 		});
-		container.addMapping(new capsule_Mapping("comicbox.provider.DiagnosticsProvider")).toProvider(tmp1).asShared();
-		let tmp2 = capsule_Provider.ProvideFactory(function(c) {
+		container.addMapping(new capsule_Mapping("comicbox.provider.DiagnosticsProvider")).toProvider(tmp2).asShared();
+		let tmp3 = capsule_Provider.ProvideFactory(function(c) {
 			return new comicbox_provider_DefinitionProvider(c.getMappingByIdentifier("boxup.Reporter").getValue(c));
 		});
-		container.addMapping(new capsule_Mapping("comicbox.provider.DefinitionProvider")).toProvider(tmp2).asShared();
-		let tmp3 = capsule_Provider.ProvideFactory(function(c) {
+		container.addMapping(new capsule_Mapping("comicbox.provider.DefinitionProvider")).toProvider(tmp3).asShared();
+		let tmp4 = capsule_Provider.ProvideFactory(function(c) {
 			return new comicbox_provider_DocumentProvider(c.getMappingByIdentifier("boxup.Reporter").getValue(c),c.getMappingByIdentifier("comicbox.provider.DefinitionProvider").getValue(c));
 		});
-		container.addMapping(new capsule_Mapping("comicbox.provider.DocumentProvider")).toProvider(tmp3).asShared();
+		container.addMapping(new capsule_Mapping("comicbox.provider.DocumentProvider")).toProvider(tmp4).asShared();
+		let tmp5 = capsule_Provider.ProvideFactory(function(c) {
+			return new comicbox_preview_PreviewManager(c.getMappingByIdentifier("vscode.Uri" + "#" + "comicbox.uri").getValue(c),c.getMappingByIdentifier("comicbox.generator.HtmlGenerator").getValue(c),c.getMappingByIdentifier("comicbox.provider.DocumentProvider").getValue(c));
+		});
+		container.addMapping(new capsule_Mapping("comicbox.preview.PreviewManager")).toProvider(tmp5).asShared();
 	}
 }
 comicbox_ComicboxModule.__name__ = "comicbox.ComicboxModule";
@@ -1591,6 +1694,247 @@ class comicbox_boxup_VscodeReporter {
 comicbox_boxup_VscodeReporter.__name__ = "comicbox.boxup.VscodeReporter";
 Object.assign(comicbox_boxup_VscodeReporter.prototype, {
 	__class__: comicbox_boxup_VscodeReporter
+});
+class comicbox_generator_HtmlGenerator {
+	constructor() {
+		this.panelCount = 0;
+		this.pageCount = 0;
+	}
+	generate(nodes) {
+		this.panelCount = 0;
+		this.pageCount = 0;
+		return boxup_Outcome.Ok(this.generateNodes(nodes).join(""));
+	}
+	generateNodes(nodes,wrapParagraph) {
+		if(wrapParagraph == null) {
+			wrapParagraph = true;
+		}
+		let result = new Array(nodes.length);
+		let _g = 0;
+		let _g1 = nodes.length;
+		while(_g < _g1) {
+			let i = _g++;
+			result[i] = this.generateNode(nodes[i],wrapParagraph);
+		}
+		return result;
+	}
+	generateNode(node,wrapParagraph) {
+		if(wrapParagraph == null) {
+			wrapParagraph = true;
+		}
+		let _g = node.type;
+		switch(_g._hx_index) {
+		case 0:
+			let _g1 = _g.name;
+			switch(_g1) {
+			case "Comic":
+				let _g2 = new haxe_ds_StringMap();
+				_g2.h["class"] = "comic-header";
+				return this.el("header",_g2,[this.el("h1",new haxe_ds_StringMap(),[node.getProperty("title")]),this.el("h2",new haxe_ds_StringMap(),["Author: " + node.getProperty("author")])]);
+			case "Dialog":
+				let _g3 = new haxe_ds_StringMap();
+				_g3.h["class"] = "dialog";
+				let _g4 = new haxe_ds_StringMap();
+				_g4.h["class"] = "dialog-character";
+				return this.el("div",_g3,[this.el("header",_g4,[this.el("h4",new haxe_ds_StringMap(),[node.getProperty("character")])])].concat(this.generateNodes(node.children)));
+			case "Item":
+				return this.el("li",new haxe_ds_StringMap(),this.generateNodes(node.children,wrapParagraph));
+			case "Page":
+				this.pageCount++;
+				let _g5 = new haxe_ds_StringMap();
+				_g5.h["class"] = "page";
+				return this.el("section",_g5,this.generateNodes(node.children));
+			case "Panel":
+				this.panelCount++;
+				let _g6 = new haxe_ds_StringMap();
+				_g6.h["class"] = "panel";
+				let _g7 = new haxe_ds_StringMap();
+				_g7.h["class"] = "panel-header";
+				return this.el("div",_g6,[this.el("header",_g7,[this.el("h3",new haxe_ds_StringMap(),["Panel " + this.pageCount + "." + this.panelCount])].concat(this.generateNodes(node.children)))]);
+			default:
+				let _g8 = new haxe_ds_StringMap();
+				_g8.h["class"] = _g1.toLowerCase();
+				return this.el("div",_g8,this.generateNodes(node.children,wrapParagraph));
+			}
+			break;
+		case 1:
+			return this.el("li",new haxe_ds_StringMap(),this.generateNodes(node.children,wrapParagraph));
+		case 2:
+			let _this = node.children;
+			let result = new Array(_this.length);
+			let _g9 = 0;
+			let _g10 = _this.length;
+			while(_g9 < _g10) {
+				let i = _g9++;
+				result[i] = this.generateNode(_this[i],false);
+			}
+			return result.join("");
+		case 3:
+			return StringTools.htmlEscape(node.textContent);
+		}
+	}
+	el(tag,props,children) {
+		let out = "<" + tag;
+		let _g = [];
+		let h = props.h;
+		let _g1_keys = Object.keys(h);
+		let _g1_length = _g1_keys.length;
+		let _g1_current = 0;
+		while(_g1_current < _g1_length) {
+			let key = _g1_keys[_g1_current++];
+			let _g2_value = h[key];
+			if(_g2_value != null) {
+				_g.push("" + key + "=\"" + _g2_value + "\"");
+			} else {
+				_g.push(null);
+			}
+		}
+		let _g1 = [];
+		let _g2 = 0;
+		while(_g2 < _g.length) {
+			let v = _g[_g2];
+			++_g2;
+			if(v != null) {
+				_g1.push(v);
+			}
+		}
+		if(_g1.length > 0) {
+			out += " " + _g1.join(" ");
+		}
+		if(children != null) {
+			return out + ">" + children.join("") + ("</" + tag + ">");
+		} else {
+			return out + "/>";
+		}
+	}
+}
+comicbox_generator_HtmlGenerator.__name__ = "comicbox.generator.HtmlGenerator";
+Object.assign(comicbox_generator_HtmlGenerator.prototype, {
+	__class__: comicbox_generator_HtmlGenerator
+});
+class comicbox_preview_PreviewManager {
+	constructor(extensionUri,generator,documents) {
+		this.previews = [];
+		let _gthis = this;
+		this.extensionUri = extensionUri;
+		this.generator = generator;
+		this.documents = documents;
+		this.documents.events.event(function(data) {
+			_gthis.updatePreviewForDocument(data.doc,data.nodes);
+		});
+	}
+	register(context) {
+		let _gthis = this;
+		context.subscriptions.push(Vscode.commands.registerCommand("comicbox.showPreview",function() {
+			_gthis.createPreview(Vscode.window.activeTextEditor.document);
+		}));
+		Vscode.window.registerWebviewPanelSerializer("comicbox-preview",new comicbox_preview_PreviewSerializer(this));
+	}
+	addPreview(preview) {
+		this.previews.push(preview);
+	}
+	updatePreviewForDocument(document,nodes) {
+		let preview = this.getPreviewForDocument(document);
+		if(preview == null) {
+			return;
+		}
+		this.updatePreview(preview,nodes);
+	}
+	updatePreview(preview,nodes) {
+		let _g = this.generator.generate(nodes);
+		switch(_g._hx_index) {
+		case 0:
+			preview.updateHtml(_g.data);
+			break;
+		case 1:
+			let tmp = Vscode.window;
+			let _g1 = [];
+			let _g2 = 0;
+			let _g3 = _g.error;
+			while(_g2 < _g3.length) _g1.push(_g3[_g2++].message);
+			tmp.showErrorMessage("Could not generate a preview: " + _g1.join("\n"));
+			break;
+		}
+	}
+	getPreviewForDocument(document) {
+		let path = document.uri.toString();
+		return Lambda.find(this.previews,function(p) {
+			return p.documentUri.toString() == path;
+		});
+	}
+	createPreview(document) {
+		if(!comicbox_Util.isBoxupDocument(document)) {
+			Vscode.window.showErrorMessage("Only boxup documents can use the preview");
+			return;
+		}
+		let preview = this.getPreviewForDocument(document);
+		if(preview == null) {
+			let panel = Vscode.window.createWebviewPanel("comicbox-preview","Comicbox Preview",vscode_ViewColumn.Three,{ enableScripts : true, retainContextWhenHidden : false});
+			preview = new comicbox_preview_PreviewPanel(document.uri,this,panel);
+			this.addPreview(preview);
+		}
+		let nodes = this.documents.getDocument(document.uri.toString());
+		if(nodes != null) {
+			this.updatePreview(preview,nodes);
+		}
+	}
+}
+comicbox_preview_PreviewManager.__name__ = "comicbox.preview.PreviewManager";
+Object.assign(comicbox_preview_PreviewManager.prototype, {
+	__class__: comicbox_preview_PreviewManager
+});
+class comicbox_preview_PreviewPanel {
+	constructor(docuemntUri,manager,panel) {
+		this.disposables = [];
+		let _gthis = this;
+		this.documentUri = docuemntUri;
+		this.manager = manager;
+		this.panel = panel;
+		this.init();
+		panel.onDidDispose(function(_) {
+			_gthis.dispose();
+		},null,this.disposables);
+		panel.webview.onDidReceiveMessage(function(message) {
+			_gthis.handleMessages(message);
+		},null,this.disposables);
+	}
+	updateHtml(content) {
+		this.panel.webview.postMessage({ command : "update", content : content});
+	}
+	init() {
+		this.panel.title = "";
+		this.panel.webview.html = this.render();
+		this.panel.webview.postMessage({ command : "setState", uri : this.documentUri.toString()});
+	}
+	dispose() {
+		HxOverrides.remove(this.manager.previews,this);
+		this.panel.dispose();
+		while(this.disposables.length > 0) this.disposables.pop().dispose();
+	}
+	render() {
+		let scriptSrc = vscode_Uri.joinPath(this.manager.extensionUri,"dist","assets","preview.js");
+		return "\r\n      <!doctype html>\r\n\t\t\t<html lang=\"en\">\r\n        <head>\r\n          <meta charset=\"UTF-8\">\r\n          <title>Comicbox Preview</title>\r\n          <style>\r\n            a {\r\n              color: inherit;\r\n            }\r\n            a:hover {\r\n              color: inherit;\r\n            }\r\n            h1, h2, h3, h4 {\r\n              font-weight: normal;\r\n              margin: 10px 0;\r\n              text-transform: uppercase;\r\n            }\r\n            h2, h3, h4 {\r\n              font-size: inherit;\r\n            }\r\n            .comic {\r\n              margin-bottom: 20px;\r\n            }\r\n            .notes {\r\n              font-style: italic;\r\n              padding: 5px 20px;\r\n              background: #f7f7f7;\r\n              color: #8a8a8a;\r\n              margin-bottom: 40px;\r\n            }\r\n            .page {\r\n              padding-left: 10px;\r\n              padding-top: 10px;\r\n              border-top: 1px solid;\r\n              margin-bottom: 40px;\r\n            }\r\n            .page h2 {\r\n              color: #cccccc;\r\n            }\r\n            .panel {\r\n              margin-bottom: 40px;\r\n            }\r\n            .panel .attached:before {\r\n              content: \"(attached)\";\r\n              color: #8a8a8a;\r\n            }\r\n            .panel .mood {\r\n              color: #8a8a8a;\r\n            }\r\n            .dialog {\r\n              text-align: center;\r\n              margin-bottom: 20px;\r\n            }\r\n          </style>\r\n        </head>\r\n        <body>\r\n          <div id=\"target\"></div>\r\n          <script src=\"" + Std.string(this.panel.webview.asWebviewUri(scriptSrc)) + "\"></script>\r\n        </body>\r\n      </html>\r\n    ";
+	}
+	handleMessages(message) {
+	}
+}
+comicbox_preview_PreviewPanel.__name__ = "comicbox.preview.PreviewPanel";
+Object.assign(comicbox_preview_PreviewPanel.prototype, {
+	__class__: comicbox_preview_PreviewPanel
+});
+class comicbox_preview_PreviewSerializer {
+	constructor(manager) {
+		this.manager = manager;
+	}
+	deserializeWebviewPanel(webviewPanel,state) {
+		let preview = new comicbox_preview_PreviewPanel(vscode_Uri.parse(state.id),this.manager,webviewPanel);
+		this.manager.addPreview(preview);
+		return Promise.resolve();
+	}
+}
+comicbox_preview_PreviewSerializer.__name__ = "comicbox.preview.PreviewSerializer";
+Object.assign(comicbox_preview_PreviewSerializer.prototype, {
+	__class__: comicbox_preview_PreviewSerializer
 });
 class comicbox_provider_DefinitionProvider {
 	constructor(reporter) {
@@ -1655,12 +1999,16 @@ class comicbox_provider_DiagnosticsProvider {
 	clear(uri) {
 		this.collection.set(uri,[]);
 	}
+	remove(uri) {
+		this.collection.delete(uri);
+	}
 	report(errors) {
 		this.collection.clear();
 		let diags_h = Object.create(null);
 		let _g = 0;
-		while(_g < errors.length) {
-			let error = errors[_g];
+		let _g1 = errors;
+		while(_g < _g1.length) {
+			let error = _g1[_g];
 			++_g;
 			let uri = vscode_Uri.parse(error.pos.file);
 			let path = uri.toString();
@@ -1699,13 +2047,13 @@ class comicbox_provider_DiagnosticsProvider {
 			}
 			diags_h[path].push(diag);
 		}
-		let _g1_keys = Object.keys(diags_h);
-		let _g1_length = _g1_keys.length;
-		let _g1_current = 0;
-		while(_g1_current < _g1_length) {
-			let key = _g1_keys[_g1_current++];
-			let _g2_value = diags_h[key];
-			this.collection.set(vscode_Uri.parse(key),_g2_value);
+		let _g2_keys = Object.keys(diags_h);
+		let _g2_length = _g2_keys.length;
+		let _g2_current = 0;
+		while(_g2_current < _g2_length) {
+			let key = _g2_keys[_g2_current++];
+			let _g3_value = diags_h[key];
+			this.collection.set(vscode_Uri.parse(key),_g3_value);
 		}
 	}
 }
@@ -1715,9 +2063,13 @@ Object.assign(comicbox_provider_DiagnosticsProvider.prototype, {
 });
 class comicbox_provider_DocumentProvider {
 	constructor(reporter,definitions) {
+		this.events = new vscode_EventEmitter();
 		this.parsedDocuments = new haxe_ds_StringMap();
 		this.reporter = reporter;
 		this.definitions = definitions;
+	}
+	getDocument(uri) {
+		return this.parsedDocuments.h[uri];
 	}
 	removeDocument(uri) {
 		let _this = this.parsedDocuments;
@@ -1726,34 +2078,31 @@ class comicbox_provider_DocumentProvider {
 		}
 	}
 	parseDocument(document) {
+		let _gthis = this;
 		let source = new boxup_Source(document.uri.toString(),document.getText());
-		try {
-			let nodes = new boxup_Parser(source).parse();
-			let _g = this.definitions.getDefinitionFromNodes(nodes);
+		let result = boxup_OutcomeTools.map(boxup_OutcomeTools.map(boxup_OutcomeTools.map(source.tokens,function(tokens) {
+			return new boxup_Parser(tokens).parse();
+		}),function(nodes) {
+			let _g = _gthis.definitions.getDefinitionFromNodes(nodes);
 			switch(_g._hx_index) {
 			case 0:
-				let _g1 = _g.v.validate(nodes);
-				switch(_g1._hx_index) {
-				case 0:
-					break;
-				case 1:
-					this.reporter.report(_g1.errors,source);
-					break;
-				}
-				break;
+				return _g.v.validate(nodes);
 			case 1:
-				break;
+				return boxup_Outcome.Ok(nodes);
 			}
-			let this1 = this.parsedDocuments;
+		}),function(nodes) {
+			let this1 = _gthis.parsedDocuments;
 			let key = document.uri.toString();
 			this1.h[key] = nodes;
-		} catch( _g ) {
-			let _g1 = haxe_Exception.caught(_g).unwrap();
-			if(((_g1) instanceof boxup_Error)) {
-				this.reporter.report([_g1],source);
-			} else {
-				throw _g;
-			}
+			return boxup_Outcome.Ok(nodes);
+		});
+		switch(result._hx_index) {
+		case 0:
+			this.events.fire({ doc : document, nodes : result.data});
+			break;
+		case 1:
+			this.reporter.report(result.error,source);
+			break;
 		}
 	}
 }
@@ -2120,8 +2469,10 @@ class js_Boot {
 js_Boot.__name__ = "js.Boot";
 var vscode_Diagnostic = require("vscode").Diagnostic;
 var vscode_DiagnosticSeverity = require("vscode").DiagnosticSeverity;
+var vscode_EventEmitter = require("vscode").EventEmitter;
 var vscode_Range = require("vscode").Range;
 var vscode_Uri = require("vscode").Uri;
+var vscode_ViewColumn = require("vscode").ViewColumn;
 function $getIterator(o) { if( o instanceof Array ) return new haxe_iterators_ArrayIterator(o); else return o.iterator(); }
 function $bind(o,m) { if( m == null ) return null; if( m.__id__ == null ) m.__id__ = $global.$haxeUID++; var f; if( o.hx__closures__ == null ) o.hx__closures__ = {}; else f = o.hx__closures__[m.__id__]; if( f == null ) { f = m.bind(o); o.hx__closures__[m.__id__] = f; } return f; }
 $global.$haxeUID |= 0;
@@ -2134,7 +2485,7 @@ if( String.fromCodePoint == null ) String.fromCodePoint = function(c) { return c
 	String.__name__ = "String";
 	Array.__name__ = "Array";
 }
-haxe_Resource.content = [{ name : "comic", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPUNvbWljIHJlcXVpcmVkPXRydWUgbXVsdGlwbGU9ZmFsc2VdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9UGFnZV0NCg0KW0Jsb2NrIG5hbWU9Q29taWNdDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPWF1dGhvciByZXF1aXJlZD10cnVlXQ0KICBbUHJvcGVydHkgbmFtZT12ZXJzaW9uIHR5cGU9SW50XQ0KICBbUHJvcGVydHkgbmFtZT1kYXRlXQ0KICBbUHJvcGVydHkgbmFtZT1maXJzdFBhZ2VOdW1iZXIgdHlwZT1JbnRdDQogIFtFbnVtUHJvcGVydHkgbmFtZT1zdGF0dXMgcmVxdWlyZWQ9dHJ1ZV0NCiAgICBbT3B0aW9uIHZhbHVlPVB1Ymxpc2hlZF0NCiAgICBbT3B0aW9uIHZhbHVlPURyYWZ0XQ0KDQpbQmxvY2sgbmFtZT1QYXJhZ3JhcGgga2luZD1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpbmtdDQoNCltCbG9jayBuYW1lPVBhZ2VdDQogIFtDaGlsZCBuYW1lPU5vdGVzXQ0KICBbQ2hpbGQgbmFtZT1QYW5lbF0NCg0KW0Jsb2NrIG5hbWU9UGFuZWxdDQogIFtDaGlsZCBuYW1lPURpYWxvZ10NCiAgW0NoaWxkIG5hbWU9Tm90ZXNdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9RGlhbG9nXQ0KICBbUHJvcGVydHkgbmFtZT1jaGFyYWN0ZXIgcmVxdWlyZWQ9dHJ1ZV0NCiAgW1Byb3BlcnR5IG5hbWU9bW9kaWZpZXJdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TW9vZF0NCiAgW0NoaWxkIG5hbWU9QXR0YWNoZWRdDQoNCltCbG9jayBuYW1lPU5vdGVzXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPUxpbmsga2luZD1UYWddDQogIFtQcm9wZXJ0eSBuYW1lPXVybCByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1Nb29kIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPUF0dGFjaGVkIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQo"},{ name : "note", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPU5vdGUgcmVxdWlyZWQ9dHJ1ZSBtdWx0aXBsZT1mYWxzZV0NCiAgW0NoaWxkIG5hbWU9U2VjdGlvbl0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpbmtdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPU5vdGVdDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPXZlcnNpb25dDQoNCltCbG9jayBuYW1lPVBhcmFncmFwaCBraW5kPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlua10NCiAgW0NoaWxkIG5hbWU9RGV0YWlsXQ0KDQpbQmxvY2sgbmFtZT1MaW5rIGtpbmQ9VGFnXQ0KICBbUHJvcGVydHkgbmFtZT11cmwgcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9RGV0YWlsIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPVNlY3Rpb25dDQogIFtQcm9wZXJ0eSBuYW1lPWlkXQ0KICBbUHJvcGVydHkgbmFtZT10aXRsZV0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPUhlYWRlciBraW5kPVRhZ10NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0KDQpbQmxvY2sgbmFtZT1MaXN0XQ0KICBbRW51bVByb3BlcnR5IG5hbWU9dHlwZV0NCiAgICBbT3B0aW9uIHZhbHVlPU9yZGVyZWRdDQogICAgW09wdGlvbiB2YWx1ZT1Vbm9yZGVyZWRdDQogIFtDaGlsZCBuYW1lPUl0ZW0gcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9SXRlbSBraW5kPUFycm93XQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQo"}];
+haxe_Resource.content = [{ name : "comic", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPUNvbWljIHJlcXVpcmVkPXRydWUgbXVsdGlwbGU9ZmFsc2VdDQogIFtDaGlsZCBuYW1lPUluZm9dDQogIFtDaGlsZCBuYW1lPVBhZ2VdDQogIFtDaGlsZCBuYW1lPVNjZW5lXQ0KDQpbQmxvY2sgbmFtZT1Db21pY10NCiAgW1Byb3BlcnR5IG5hbWU9dGl0bGUgcmVxdWlyZWQ9dHJ1ZV0NCiAgW1Byb3BlcnR5IG5hbWU9YXV0aG9yIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPXZlcnNpb24gdHlwZT1JbnRdDQogIFtQcm9wZXJ0eSBuYW1lPWRhdGVdDQogIFtQcm9wZXJ0eSBuYW1lPWZpcnN0UGFnZU51bWJlciB0eXBlPUludF0NCiAgW0VudW1Qcm9wZXJ0eSBuYW1lPXN0YXR1cyByZXF1aXJlZD10cnVlXQ0KICAgIFtPcHRpb24gdmFsdWU9UHVibGlzaGVkXQ0KICAgIFtPcHRpb24gdmFsdWU9RHJhZnRdDQoNCltCbG9jayBuYW1lPUluZm9dDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPVBhcmFncmFwaCBraW5kPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlua10NCg0KW0Jsb2NrIG5hbWU9U2NlbmVdDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlIHJlcXVpcmVkPXRydWVdDQoNCltCbG9jayBuYW1lPVBhZ2VdDQogIFtDaGlsZCBuYW1lPUluZm9dDQogIFtDaGlsZCBuYW1lPVBhbmVsXQ0KDQpbQmxvY2sgbmFtZT1QYW5lbF0NCiAgW0NoaWxkIG5hbWU9RGlhbG9nXQ0KICBbQ2hpbGQgbmFtZT1TZnhdDQogIFtDaGlsZCBuYW1lPUluZm9dDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9RGlhbG9nXQ0KICBbUHJvcGVydHkgbmFtZT1jaGFyYWN0ZXIgcmVxdWlyZWQ9dHJ1ZV0NCiAgW1Byb3BlcnR5IG5hbWU9bW9kaWZpZXJdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaCByZXF1aXJlZD10cnVlXQ0KICBbQ2hpbGQgbmFtZT1Nb29kXQ0KICBbQ2hpbGQgbmFtZT1BdHRhY2hlZF0NCg0KW0Jsb2NrIG5hbWU9U2Z4XQ0KICBbUHJvcGVydHkgbmFtZT1ub3RlXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPUxpbmsga2luZD1UYWddDQogIFtQcm9wZXJ0eSBuYW1lPXVybCByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1Nb29kIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPUF0dGFjaGVkIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPUxpc3RdDQogIFtFbnVtUHJvcGVydHkgbmFtZT10eXBlXQ0KICAgIFtPcHRpb24gdmFsdWU9T3JkZXJlZF0NCiAgICBbT3B0aW9uIHZhbHVlPVVub3JkZXJlZF0NCiAgW0NoaWxkIG5hbWU9SXRlbSByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1JdGVtIGtpbmQ9QXJyb3ddDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg"},{ name : "note", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPU5vdGUgcmVxdWlyZWQ9dHJ1ZSBtdWx0aXBsZT1mYWxzZV0NCiAgW0NoaWxkIG5hbWU9U2VjdGlvbl0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpbmtdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPU5vdGVdDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPXZlcnNpb25dDQoNCltCbG9jayBuYW1lPVBhcmFncmFwaCBraW5kPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlua10NCiAgW0NoaWxkIG5hbWU9RGV0YWlsXQ0KDQpbQmxvY2sgbmFtZT1MaW5rIGtpbmQ9VGFnXQ0KICBbUHJvcGVydHkgbmFtZT11cmwgcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9RGV0YWlsIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPVNlY3Rpb25dDQogIFtQcm9wZXJ0eSBuYW1lPWlkXQ0KICBbUHJvcGVydHkgbmFtZT10aXRsZV0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPUhlYWRlciBraW5kPVRhZ10NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0KDQpbQmxvY2sgbmFtZT1MaXN0XQ0KICBbRW51bVByb3BlcnR5IG5hbWU9dHlwZV0NCiAgICBbT3B0aW9uIHZhbHVlPU9yZGVyZWRdDQogICAgW09wdGlvbiB2YWx1ZT1Vbm9yZGVyZWRdDQogIFtDaGlsZCBuYW1lPUl0ZW0gcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9SXRlbSBraW5kPUFycm93XQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQo"}];
 js_Boot.__toStr = ({ }).toString;
 boxup_cli_DefinitionGenerator.defaultParagraphChildren = [new boxup_cli_ChildDefinition("@italic",null,null),new boxup_cli_ChildDefinition("@bold",null,null),new boxup_cli_ChildDefinition("@underlined",null,null),new boxup_cli_ChildDefinition("@raw",null,null)];
 boxup_cli_DefinitionGenerator.defaultBlocks = [new boxup_cli_BlockDefinition("@italic","Tag",[],[]),new boxup_cli_BlockDefinition("@bold","Tag",[],[]),new boxup_cli_BlockDefinition("@underlined","Tag",[],[]),new boxup_cli_BlockDefinition("@raw","Tag",[],[])];

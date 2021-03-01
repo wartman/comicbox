@@ -1,3 +1,5 @@
+import comicbox.preview.PreviewManager;
+import vscode.Uri;
 import comicbox.provider.DiagnosticsProvider;
 import comicbox.provider.DocumentProvider;
 import comicbox.ComicboxModule;
@@ -10,12 +12,14 @@ using comicbox.Util;
 function activate(context:ExtensionContext) {
   var container = new Container();
   
-  container.use(ComicboxModule);
+  container.use(new ComicboxModule(Uri.parse(context.extensionUri)));
   
   var docs = container.get(DocumentProvider);
   var diag = container.get(DiagnosticsProvider);
+  var preview = container.get(PreviewManager);
 
   diag.register(context);
+  preview.register(context);
 
   Vscode.workspace.onDidChangeTextDocument(change -> {
     if (change.document.isBoxupDocument()) {
@@ -33,7 +37,6 @@ function activate(context:ExtensionContext) {
 
   Vscode.window.onDidChangeActiveTextEditor(change -> {
     if (change.document.isBoxupDocument()) {
-      diag.clear(change.document.uri);
       docs.parseDocument(change.document);
     }
   });

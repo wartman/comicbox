@@ -5,10 +5,12 @@ import vscode.Diagnostic;
 import vscode.Uri;
 import vscode.DiagnosticCollection;
 import vscode.ExtensionContext;
-import boxup.Error;
+import boxup.ErrorCollection;
 
 using comicbox.Util;
 
+// Note: this is probably the worng way to do things -- we should
+//       ideally have a LSP server at some point.
 class DiagnosticsProvider {
   final collection:DiagnosticCollection;
   
@@ -28,7 +30,7 @@ class DiagnosticsProvider {
     collection.delete(uri);
   }
 
-  public function report(errors:Array<Error>) {
+  public function report(errors:ErrorCollection) {
     collection.clear();
     var diags:Map<String, Array<Diagnostic>> = [];
     for (error in errors) {

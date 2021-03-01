@@ -1,5 +1,6 @@
 package comicbox.generator;
 
+import boxup.Outcome;
 import boxup.Node;
 import boxup.Generator;
 
@@ -8,9 +9,7 @@ class PdfGenerator implements Generator<String> {
     // todo
   }
   
-  public function generate(nodes:Array<Node>):String {
-    
-
-    return null;
+  public function generate(nodes:Array<Node>):Outcome<String> {
+    return Ok('');
   }
 }
