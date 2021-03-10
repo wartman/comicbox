@@ -34,6 +34,7 @@ class HtmlGenerator implements Generator<String> {
         ]);
       case Block('Page'):
         pageCount++;
+        panelCount = 0;
         el('section', [ 'class' => 'page' ], generateNodes(node.children));
       case Block('Panel'):
         panelCount++;

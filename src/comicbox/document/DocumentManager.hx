@@ -1,4 +1,4 @@
-package comicbox.provider;
+package comicbox.document;
 
 import vscode.EventEmitter;
 import vscode.TextDocument;
@@ -6,14 +6,14 @@ import boxup.Reporter;
 import boxup.Source;
 import boxup.Parser;
 import boxup.Node;
+import comicbox.definition.DefintionManager;
 
-@:deprecated('Use comicbox.document.DocumentManager')
-class DocumentProvider {
-  final definitions:DefinitionProvider;
+class DocumentManager {
+  final definitions:DefintionManager;
   final reporter:Reporter;
   final parsedDocuments:Map<String, Array<Node>> = [];
   public final events:EventEmitter<{ doc:TextDocument, nodes:Array<Node> }> = new EventEmitter();
-
+  
   public function new(reporter, definitions) {
     this.reporter = reporter;
     this.definitions = definitions;

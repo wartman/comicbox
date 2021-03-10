@@ -3,12 +3,12 @@ package comicbox.boxup;
 import boxup.ErrorCollection;
 import boxup.Reporter;
 import boxup.Source;
-import comicbox.provider.DiagnosticsProvider;
+import comicbox.diagnostic.DiagnosticManager;
 
 using comicbox.Util;
 
 class VscodeReporter implements Reporter {
-  final diagnostics:DiagnosticsProvider;
+  final diagnostics:DiagnosticManager;
   
   public function new(diagnostics) {
     this.diagnostics = diagnostics;

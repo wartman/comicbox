@@ -1,10 +1,16 @@
-import comicbox.preview.PreviewManager;
 import vscode.Uri;
-import comicbox.provider.DiagnosticsProvider;
-import comicbox.provider.DocumentProvider;
-import comicbox.ComicboxModule;
-import capsule.Container;
 import vscode.ExtensionContext;
+import capsule.Container;
+import comicbox.document.DocumentManager;
+import comicbox.document.DocumentModule;
+import comicbox.diagnostic.DiagnosticManager;
+import comicbox.diagnostic.DiagnosticModule;
+import comicbox.core.PluginManager;
+import comicbox.ComicboxModule;
+import comicbox.core.PluginModule;
+import comicbox.preview.PreviewModule;
+import comicbox.definition.DefinitionModule;
+import comicbox.render.RenderModule;
 
 using comicbox.Util;
 
@@ -12,14 +18,20 @@ using comicbox.Util;
 function activate(context:ExtensionContext) {
   var container = new Container();
   
-  container.use(new ComicboxModule(Uri.parse(context.extensionUri)));
+  container.use(PluginModule);
+  container.use(new ComicboxModule({
+    extensionUri: Uri.parse(context.extensionUri)
+  }));
+  container.use(DiagnosticModule);
+  container.use(DefinitionModule);
+  container.use(DocumentModule);
+  container.use(PreviewModule);
+  container.use(RenderModule);
   
-  var docs = container.get(DocumentProvider);
-  var diag = container.get(DiagnosticsProvider);
-  var preview = container.get(PreviewManager);
+  var docs = container.get(DocumentManager);
+  var diag = container.get(DiagnosticManager);
 
-  diag.register(context);
-  preview.register(context);
+  container.get(PluginManager).register(context);
 
   Vscode.workspace.onDidChangeTextDocument(change -> {
     if (change.document.isBoxupDocument()) {
@@ -40,14 +52,4 @@ function activate(context:ExtensionContext) {
       docs.parseDocument(change.document);
     }
   });
-
-  context.subscriptions.push(
-    Vscode.commands.registerCommand('comicbox.compile', function () {
-      Vscode.window.showInformationMessage('Not ready yet');
-    })
-  );
-
-  // // context.subscriptions.push(Vscode.commands.registerCommand('comicbox.test', function () {
-  // //   Vscode.window.showInformationMessage('Testing Comicbox');
-  // // }));
 }

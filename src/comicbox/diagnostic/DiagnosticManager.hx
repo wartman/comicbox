@@ -1,4 +1,4 @@
-package comicbox.provider;
+package comicbox.diagnostic;
 
 import vscode.Range;
 import vscode.Diagnostic;
@@ -6,13 +6,11 @@ import vscode.Uri;
 import vscode.DiagnosticCollection;
 import vscode.ExtensionContext;
 import boxup.ErrorCollection;
+import comicbox.core.Plugin;
 
 using comicbox.Util;
 
-// Note: this is probably the worng way to do things -- we should
-//       ideally have a LSP server at some point.
-@:deprecated('Use comicbox.diagnostics.DiagnosticManager')
-class DiagnosticsProvider {
+class DiagnosticManager implements Plugin {
   final collection:DiagnosticCollection;
   
   public function new() {

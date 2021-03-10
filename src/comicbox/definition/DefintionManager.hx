@@ -1,33 +1,28 @@
-package comicbox.provider;
+package comicbox.definition;
 
-import boxup.Builtin;
 import haxe.ds.Option;
 import haxe.Exception;
+import boxup.Builtin;
 import boxup.Node;
 import boxup.Reporter;
 import boxup.cli.Definition;
 import boxup.cli.DefinitionCompiler;
 import boxup.cli.ResourceLoader;
 
-@:deprecated('Use comicbox.definition.DefinitionManager')
-class DefinitionProvider {
+class DefintionManager {
   final reporter:Reporter;
   final definitions:Map<String, Definition> = [];
 
   public function new(reporter) {
     this.reporter = reporter;
-    init();
-  }
-
-  function init() {
-    var defLoader = new DefinitionCompiler(new ResourceLoader(), reporter);
-    switch defLoader.load('comic') {
+    var loader = new DefinitionCompiler(new ResourceLoader(), reporter);
+    switch loader.load('comic') {
       case Some(definition): 
         definitions.set('comic', definition);
       case None:
         throw new Exception('Could not load comic definition');
     }
-    switch defLoader.load('note') {
+    switch loader.load('note') {
       case Some(definition): 
         definitions.set('note', definition);
       case None:

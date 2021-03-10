@@ -6,18 +6,19 @@ import vscode.TextDocument;
 import vscode.Uri;
 import vscode.Disposable;
 import boxup.Node;
+import comicbox.core.Plugin;
 import comicbox.generator.HtmlGenerator;
-import comicbox.provider.DocumentProvider;
+import comicbox.document.DocumentManager;
 
 using Lambda;
 using comicbox.Util;
 
 @:allow(comicbox.preview.PreviewPanel)
-class PreviewManager {
+class PreviewManager implements Plugin {
   final previews:Array<PreviewPanel> = [];
   final disposables:Array<Disposable> = [];
   final generator:HtmlGenerator;
-  final documents:DocumentProvider;
+  final documents:DocumentManager;
   public final extensionUri:Uri;
 
   public function new(@:inject.tag('comicbox.uri') extensionUri, generator, documents) {
