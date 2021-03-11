@@ -34,7 +34,7 @@
   [EnumProperty name=type]
     [Option value=Ordered]
     [Option value=Unordered]
-  [Child name=Item required=true]
+  [Child name=Item symbol="-" required=true]
 
-[Block name=Item kind=Arrow]
+[Block name=Item]
   [Child name=Paragraph]

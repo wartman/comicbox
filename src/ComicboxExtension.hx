@@ -27,29 +27,7 @@ function activate(context:ExtensionContext) {
   container.use(DocumentModule);
   container.use(PreviewModule);
   container.use(RenderModule);
-  
-  var docs = container.get(DocumentManager);
-  var diag = container.get(DiagnosticManager);
 
-  container.get(PluginManager).register(context);
-
-  Vscode.workspace.onDidChangeTextDocument(change -> {
-    if (change.document.isBoxupDocument()) {
-      diag.clear(change.document.uri);
-      docs.parseDocument(change.document);
-    }
-  });
-
-  Vscode.workspace.onDidCloseTextDocument(document -> {
-    if (document.isBoxupDocument()) {
-      docs.removeDocument(document.uri.toString());
-      diag.remove(document.uri);
-    }
-  });
-
-  Vscode.window.onDidChangeActiveTextEditor(change -> {
-    if (change.document.isBoxupDocument()) {
-      docs.parseDocument(change.document);
-    }
-  });
+  var manager = container.get(PluginManager);
+  manager.register(context);
 }

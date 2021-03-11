@@ -22,26 +22,7 @@ function ComicboxExtension_activate(context) {
 	container.useServiceProvider(new capsule_Mapping("comicbox.render.RenderModule").toProvider(capsule_Provider.ProvideFactory(function(c) {
 		return new comicbox_render_RenderModule();
 	})).getValue(container));
-	let docs = container.getMappingByIdentifier("comicbox.document.DocumentManager").getValue(container);
-	let diag = container.getMappingByIdentifier("comicbox.diagnostic.DiagnosticManager").getValue(container);
 	container.getMappingByIdentifier("comicbox.core.PluginManager").getValue(container).register(context);
-	Vscode.workspace.onDidChangeTextDocument(function(change) {
-		if(comicbox_Util.isBoxupDocument(change.document)) {
-			diag.clear(change.document.uri);
-			docs.parseDocument(change.document);
-		}
-	});
-	Vscode.workspace.onDidCloseTextDocument(function(document) {
-		if(comicbox_Util.isBoxupDocument(document)) {
-			docs.removeDocument(document.uri.toString());
-			diag.remove(document.uri);
-		}
-	});
-	Vscode.window.onDidChangeActiveTextEditor(function(change) {
-		if(comicbox_Util.isBoxupDocument(change.document)) {
-			docs.parseDocument(change.document);
-		}
-	});
 }
 $hx_exports["activate"] = ComicboxExtension_activate;
 class HxOverrides {
@@ -102,8 +83,37 @@ class Std {
 	static string(s) {
 		return js_Boot.__string_rec(s,"");
 	}
+	static parseInt(x) {
+		if(x != null) {
+			let _g = 0;
+			let _g1 = x.length;
+			while(_g < _g1) {
+				let i = _g++;
+				let c = x.charCodeAt(i);
+				if(c <= 8 || c >= 14 && c != 32 && c != 45) {
+					let nc = x.charCodeAt(i + 1);
+					let v = parseInt(x,nc == 120 || nc == 88 ? 16 : 10);
+					if(isNaN(v)) {
+						return null;
+					} else {
+						return v;
+					}
+				}
+			}
+		}
+		return null;
+	}
 }
 Std.__name__ = "Std";
+class StringBuf {
+	constructor() {
+		this.b = "";
+	}
+}
+StringBuf.__name__ = "StringBuf";
+Object.assign(StringBuf.prototype, {
+	__class__: StringBuf
+});
 class StringTools {
 	static htmlEscape(s,quotes) {
 		let buf_b = "";
@@ -232,11 +242,10 @@ Object.assign(boxup_Error.prototype, {
 });
 var boxup_NodeType = $hxEnums["boxup.NodeType"] = { __ename__:true,__constructs__:null
 	,Block: ($_=function(name) { return {_hx_index:0,name:name,__enum__:"boxup.NodeType",toString:$estr}; },$_._hx_name="Block",$_.__params__ = ["name"],$_)
-	,Arrow: {_hx_name:"Arrow",_hx_index:1,__enum__:"boxup.NodeType",toString:$estr}
-	,Paragraph: {_hx_name:"Paragraph",_hx_index:2,__enum__:"boxup.NodeType",toString:$estr}
-	,Text: {_hx_name:"Text",_hx_index:3,__enum__:"boxup.NodeType",toString:$estr}
+	,Paragraph: {_hx_name:"Paragraph",_hx_index:1,__enum__:"boxup.NodeType",toString:$estr}
+	,Text: {_hx_name:"Text",_hx_index:2,__enum__:"boxup.NodeType",toString:$estr}
 };
-boxup_NodeType.__constructs__ = [boxup_NodeType.Block,boxup_NodeType.Arrow,boxup_NodeType.Paragraph,boxup_NodeType.Text];
+boxup_NodeType.__constructs__ = [boxup_NodeType.Block,boxup_NodeType.Paragraph,boxup_NodeType.Text];
 class boxup_Node {
 	constructor(type,isTag,textContent,properties,children,pos) {
 		this.textContent = null;
@@ -312,11 +321,12 @@ class boxup_Parser {
 			}
 			return boxup_Outcome.Ok(_g1);
 		} catch( _g ) {
-			let _g1 = haxe_Exception.caught(_g).unwrap();
-			if(((_g1) instanceof boxup_Error)) {
-				return boxup_Outcome.Fail([_g1]);
+			let _g1 = haxe_Exception.caught(_g);
+			let _g2 = _g1.unwrap();
+			if(((_g2) instanceof boxup_Error)) {
+				return boxup_Outcome.Fail([_g2]);
 			} else {
-				throw _g;
+				return boxup_Outcome.Fail([new boxup_Error(_g1.details(),{ min : 0, max : 0, file : this.tokens.length != 0 ? this.tokens[0].pos.file : "<unknown>"})]);
 			}
 		}
 	}
@@ -333,14 +343,12 @@ class boxup_Parser {
 		if(this.match("<whitespace>")) {
 			return this.parseRoot(indent + 1);
 		}
-		if(this.match("<comment>")) {
+		if(this.match("[/")) {
+			this.ignoreComment();
 			return this.parseRoot(indent);
 		}
 		if(this.match("[")) {
 			return this.parseBlock(indent);
-		}
-		if(this.match("->")) {
-			return this.parseArrowBlock(indent);
 		}
 		return this.parseParagraph(indent);
 	}
@@ -349,14 +357,12 @@ class boxup_Parser {
 			return null;
 		}
 		this.ignoreWhitespace();
-		if(this.match("<comment>")) {
+		if(this.match("[/")) {
+			this.ignoreComment();
 			return this.parseRootInline(indent);
 		}
 		if(this.match("[")) {
 			return this.parseBlock(indent);
-		}
-		if(this.match("->")) {
-			return this.parseArrowBlock(indent);
 		}
 		return this.parseParagraph(indent);
 	}
@@ -365,9 +371,27 @@ class boxup_Parser {
 			isTag = false;
 		}
 		this.ignoreWhitespace();
-		let blockName = this.blockIdentifier();
 		let properties = [];
 		let children = [];
+		let blockName;
+		let _g = this.symbol();
+		if(_g == null) {
+			let name = this.blockIdentifier();
+			if(this.match(".")) {
+				let value = this.parseValue(true);
+				if(value == null) {
+					throw haxe_Exception.thrown(this.error("Expected an ID",this.peek().pos));
+				}
+				properties.push({ name : "id", value : value, pos : value.pos});
+			}
+			blockName = name;
+		} else {
+			let value = this.parseValue(true);
+			if(value != null) {
+				properties.push({ name : "id", value : value, pos : value.pos});
+			}
+			blockName = _g;
+		}
 		this.ignoreWhitespace();
 		if(!this.check("]")) {
 			while(true) {
@@ -439,64 +463,6 @@ class boxup_Parser {
 		}
 		return new boxup_Node(boxup_NodeType.Block(blockName.value),isTag,null,properties,children,blockName.pos);
 	}
-	parseArrowBlock(indent) {
-		let tok = this.previous();
-		let properties = [];
-		let children = [];
-		let childIndent = 0;
-		this.ignoreWhitespace();
-		if(!this.isNewline(this.peek())) {
-			children.push(this.parseRootInline(indent));
-		} else if(this.isPropertyBlock(indent)) {
-			while(true) {
-				let prev = this.position;
-				let tmp;
-				let tmp1;
-				if(!this.isAtEnd()) {
-					childIndent = this.findIndent();
-					tmp1 = childIndent > indent;
-				} else {
-					tmp1 = false;
-				}
-				if(tmp1) {
-					tmp = true;
-				} else {
-					this.position = prev;
-					tmp = false;
-				}
-				if(!tmp) {
-					break;
-				}
-				properties.push(this.parseProperty(false));
-			}
-		} else {
-			while(true) {
-				let prev = this.position;
-				let tmp;
-				let tmp1;
-				if(!this.isAtEnd()) {
-					childIndent = this.findIndent();
-					tmp1 = childIndent > indent;
-				} else {
-					tmp1 = false;
-				}
-				if(tmp1) {
-					tmp = true;
-				} else {
-					this.position = prev;
-					tmp = false;
-				}
-				if(!tmp) {
-					break;
-				}
-				let _g = this.parseRoot(childIndent);
-				if(_g != null) {
-					children.push(_g);
-				}
-			}
-		}
-		return new boxup_Node(boxup_NodeType.Arrow,null,null,properties,children,tok.pos);
-	}
 	isPropertyBlock(indent) {
 		let start = this.position;
 		if(this.findIndent() > indent && this.identifier() != null) {
@@ -514,10 +480,16 @@ class boxup_Parser {
 			isInBlockDecl = true;
 		}
 		let name = this.identifier();
+		if(name == null) {
+			throw haxe_Exception.thrown(this.error("Expected an identifier",this.peek().pos));
+		}
 		this.ignoreWhitespace();
 		this.consume("=");
 		this.ignoreWhitespace();
 		let value = this.parseValue(isInBlockDecl);
+		if(value == null) {
+			throw haxe_Exception.thrown(this.error("Expected a value",this.peek().pos));
+		}
 		return { name : name.value, value : value, pos : name.pos};
 	}
 	parseValue(isInBlockDecl) {
@@ -527,6 +499,9 @@ class boxup_Parser {
 		})) : boxup_TokenTools.merge(this.readWhile(function() {
 			return !_gthis.isNewline(_gthis.peek());
 		}));
+		if(tok == null) {
+			return null;
+		}
 		return { type : this.getType(tok.value), value : tok.value, pos : tok.pos};
 	}
 	parseParagraph(indent) {
@@ -622,6 +597,15 @@ class boxup_Parser {
 		let tok = boxup_TokenTools.merge(out);
 		return new boxup_Node(boxup_NodeType.Text,null,tok.value,[],[],tok.pos);
 	}
+	ignoreComment() {
+		let _gthis = this;
+		this.readWhile(function() {
+			return !_gthis.check("/]");
+		});
+		if(!this.isAtEnd()) {
+			this.consume("/]");
+		}
+	}
 	parseString(delimiter) {
 		let _gthis = this;
 		let out = boxup_TokenTools.merge(this.readWhile(function() {
@@ -634,10 +618,14 @@ class boxup_Parser {
 		return out;
 	}
 	isBlockStart() {
-		if(!this.check("[")) {
-			return this.check("->");
-		} else {
-			return true;
+		return this.check("[");
+	}
+	symbol() {
+		switch(this.peek().type) {
+		case "!":case "#":case "$":case "%":case "&":case "*":case "+":case "-":case ":":case "<":case ">":case "?":case "@":case "^":
+			return this.advance();
+		default:
+			return null;
 		}
 	}
 	blockIdentifier() {
@@ -835,11 +823,12 @@ class boxup_Scanner {
 			_g.push({ type : "<eof>", value : "", pos : { min : this.position, max : this.position, file : this.source.filename}});
 			return boxup_Outcome.Ok(_g);
 		} catch( _g ) {
-			let _g1 = haxe_Exception.caught(_g).unwrap();
-			if(((_g1) instanceof boxup_Error)) {
-				return boxup_Outcome.Fail([_g1]);
+			let _g1 = haxe_Exception.caught(_g);
+			let _g2 = _g1.unwrap();
+			if(((_g2) instanceof boxup_Error)) {
+				return boxup_Outcome.Fail([_g2]);
 			} else {
-				throw _g;
+				return boxup_Outcome.Fail([this.error(_g1.details(),0,0)]);
 			}
 		}
 	}
@@ -861,36 +850,50 @@ class boxup_Scanner {
 			break;
 		case " ":
 			return this.createToken("<whitespace>");
+		case "!":
+			return this.createToken("!");
 		case "\"":
 			return this.createToken("\"");
+		case "#":
+			return this.createToken("#");
+		case "$":
+			return this.createToken("$");
+		case "%":
+			return this.createToken("%");
+		case "&":
+			return this.createToken("&");
 		case "'":
 			return this.createToken("'");
 		case "*":
 			return this.createToken("*");
+		case "+":
+			return this.createToken("+");
 		case "-":
-			if(this.match(">")) {
-				return this.createToken("->","->");
+			return this.createToken("-");
+		case ".":
+			return this.createToken(".");
+		case "/":
+			if(this.match("]")) {
+				return this.createToken("/]","/]");
 			} else {
-				return { type : "<text>", value : r + this.readWhile(function() {
-					return _gthis.isAlphaNumeric(_gthis.peek());
-				}), pos : { min : this.start, max : this.position, file : this.source.filename}};
+				return this.createToken("/");
 			}
 			break;
-		case "/":
-			return this.createToken("/");
+		case ":":
+			return this.createToken(":");
 		case "<":
 			return this.createToken("<");
 		case "=":
 			return this.createToken("=");
 		case ">":
 			return this.createToken(">");
+		case "?":
+			return this.createToken("?");
+		case "@":
+			return this.createToken("@");
 		case "[":
 			if(this.match("/")) {
-				let value = this.readWhile(function() {
-					return !_gthis.check("]");
-				});
-				this.consume("]");
-				return this.createToken("<comment>",value);
+				return this.createToken("[/","/]");
 			} else {
 				return this.createToken("[");
 			}
@@ -899,6 +902,8 @@ class boxup_Scanner {
 			return this.createToken("<text>",this.advance());
 		case "]":
 			return this.createToken("]");
+		case "^":
+			return this.createToken("^");
 		case "_":
 			return this.createToken("_");
 		case "`":
@@ -962,11 +967,6 @@ class boxup_Scanner {
 	}
 	isAtEnd() {
 		return this.position >= this.source.content.length;
-	}
-	consume(value) {
-		if(!this.match(value)) {
-			throw haxe_Exception.thrown(this.error("Expected " + value,this.position,this.position + 1));
-		}
 	}
 	error(msg,min,max) {
 		return new boxup_Error(msg,{ min : min, max : max, file : this.source.filename});
@@ -1215,9 +1215,13 @@ Object.assign(boxup_cli_Definition.prototype, {
 	__class__: boxup_cli_Definition
 });
 class boxup_cli_BlockDefinition {
-	constructor(name,kind,children,properties) {
+	constructor(name,renderHint,kind,children,properties) {
 		this.kind = "Normal";
+		this.renderHint = "Section";
 		this.name = name;
+		if(renderHint != null) {
+			this.renderHint = renderHint;
+		}
 		if(kind != null) {
 			this.kind = kind;
 		}
@@ -1230,15 +1234,12 @@ class boxup_cli_BlockDefinition {
 	get_isTag() {
 		return this.kind == "Tag";
 	}
-	get_isArrow() {
-		return this.kind == "Arrow";
-	}
 	validate(node,definition) {
 		let _gthis = this;
 		let errors = [];
 		let existingChildren = [];
 		switch(this.kind) {
-		case "Arrow":case "Normal":case "Tag":
+		case "Normal":case "Tag":
 			try {
 				this.validateProps(node);
 			} catch( _g ) {
@@ -1258,6 +1259,15 @@ class boxup_cli_BlockDefinition {
 		default:
 		}
 		let validateChild = function(name,child) {
+			if(Lambda.exists(_gthis.children,function(c) {
+				return c.symbol == name;
+			})) {
+				let def = Lambda.find(_gthis.children,function(c) {
+					return c.symbol == name;
+				});
+				name = def.name;
+				child.type = boxup_NodeType.Block(def.name);
+			}
 			if(!Lambda.exists(_gthis.children,function(c) {
 				return c.name == name;
 			})) {
@@ -1292,27 +1302,11 @@ class boxup_cli_BlockDefinition {
 				validateChild(_g2.name,child);
 				break;
 			case 1:
-				let arrow = null;
+				let para = null;
 				let _g3 = 0;
 				let _g4 = this.children;
 				while(_g3 < _g4.length) {
 					let b = definition.getBlock(_g4[_g3++].name);
-					if(b.get_isArrow()) {
-						arrow = b;
-					}
-				}
-				if(arrow == null) {
-					errors.push(new boxup_Error("No Arrow Blocks are allowed here",child.pos));
-				} else {
-					validateChild(arrow.name,child);
-				}
-				break;
-			case 2:
-				let para = null;
-				let _g5 = 0;
-				let _g6 = this.children;
-				while(_g5 < _g6.length) {
-					let b = definition.getBlock(_g6[_g5++].name);
 					if(b.get_isParagraph()) {
 						para = b;
 					}
@@ -1323,7 +1317,7 @@ class boxup_cli_BlockDefinition {
 					validateChild(para.name,child);
 				}
 				break;
-			case 3:
+			case 2:
 				if(!this.get_isTag() && !this.get_isParagraph()) {
 					errors.push(new boxup_Error("Invalid child",child.pos));
 				}
@@ -1358,13 +1352,26 @@ class boxup_cli_BlockDefinition {
 		while(_g < _g1.length) {
 			let prop = _g1[_g];
 			++_g;
-			checkForDuplicates(prop);
 			let def = Lambda.find(this.properties,function(p) {
 				return p.name == prop.name;
 			});
 			if(def == null) {
-				throw haxe_Exception.thrown(new boxup_Error("Invalid property: " + prop.name,prop.pos));
+				let tmp;
+				if(prop.name == "id") {
+					def = Lambda.find(this.properties,function(p) {
+						return p.isId;
+					});
+					tmp = def != null;
+				} else {
+					tmp = false;
+				}
+				if(tmp) {
+					prop.name = def.name;
+				} else {
+					throw haxe_Exception.thrown(new boxup_Error("Invalid property: " + prop.name,prop.pos));
+				}
 			}
+			checkForDuplicates(prop);
 			if(prop.value.type != def.type) {
 				throw haxe_Exception.thrown(new boxup_Error("Should be a " + def.type + " but was a " + prop.value.type,prop.value.pos));
 			}
@@ -1388,10 +1395,14 @@ Object.assign(boxup_cli_BlockDefinition.prototype, {
 	__class__: boxup_cli_BlockDefinition
 });
 class boxup_cli_ChildDefinition {
-	constructor(name,required,multiple) {
+	constructor(name,symbol,required,multiple) {
 		this.multiple = true;
 		this.required = false;
+		this.symbol = null;
 		this.name = name;
+		if(symbol != null) {
+			this.symbol = symbol;
+		}
 		if(required != null) {
 			this.required = required;
 		}
@@ -1405,11 +1416,15 @@ Object.assign(boxup_cli_ChildDefinition.prototype, {
 	__class__: boxup_cli_ChildDefinition
 });
 class boxup_cli_PropertyDefinition {
-	constructor(name,required,type,allowedValues) {
+	constructor(name,isId,required,type,allowedValues) {
 		this.allowedValues = [];
 		this.type = "String";
 		this.required = false;
+		this.isId = false;
 		this.name = name;
+		if(isId != null) {
+			this.isId = isId;
+		}
 		if(required != null) {
 			this.required = required;
 		}
@@ -1460,9 +1475,22 @@ class boxup_cli_DefinitionGenerator {
 				switch(_g1.name) {
 				case "Block":
 					let kind = node.getProperty("kind","Normal");
+					let hint = Lambda.find(node.children,function(n) {
+						let _g = n.type;
+						if(_g._hx_index == 0) {
+							if(_g.name == "RenderHint") {
+								return true;
+							} else {
+								return false;
+							}
+						} else {
+							return false;
+						}
+					});
 					let _g2 = node.getProperty("name");
 					let _g3 = kind;
-					let _g4;
+					let _g4 = hint != null ? hint.getProperty("hint") : "Section";
+					let _g5;
 					if(kind == null) {
 						let _this = node.children;
 						let _g = [];
@@ -1481,9 +1509,9 @@ class boxup_cli_DefinitionGenerator {
 						while(_g2 < _g3) {
 							let i = _g2++;
 							let n = _g[i];
-							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
+							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("symbol"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
 						}
-						_g4 = result;
+						_g5 = result;
 					} else if(kind == "Paragraph") {
 						let _this = node.children;
 						let _g = [];
@@ -1502,9 +1530,9 @@ class boxup_cli_DefinitionGenerator {
 						while(_g2 < _g3) {
 							let i = _g2++;
 							let n = _g[i];
-							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
+							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("symbol"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
 						}
-						_g4 = boxup_cli_DefinitionGenerator.defaultParagraphChildren.concat(result);
+						_g5 = boxup_cli_DefinitionGenerator.defaultParagraphChildren.concat(result);
 					} else {
 						let _this = node.children;
 						let _g = [];
@@ -1523,21 +1551,21 @@ class boxup_cli_DefinitionGenerator {
 						while(_g2 < _g3) {
 							let i = _g2++;
 							let n = _g[i];
-							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
+							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("symbol"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
 						}
-						_g4 = result;
+						_g5 = result;
 					}
 					let _this = node.children;
-					let _g5 = [];
-					let _g6 = 0;
-					while(_g6 < _this.length) {
-						let v = _this[_g6];
-						++_g6;
+					let _g6 = [];
+					let _g7 = 0;
+					while(_g7 < _this.length) {
+						let v = _this[_g7];
+						++_g7;
 						let tmp;
 						let _g = v.type;
 						if(_g._hx_index == 0) {
 							switch(_g.name) {
-							case "EnumProperty":case "Property":
+							case "EnumProperty":case "IdProperty":case "Property":
 								tmp = true;
 								break;
 							default:
@@ -1547,22 +1575,24 @@ class boxup_cli_DefinitionGenerator {
 							tmp = false;
 						}
 						if(tmp) {
-							_g5.push(v);
+							_g6.push(v);
 						}
 					}
-					let result = new Array(_g5.length);
-					let _g7 = 0;
-					let _g8 = _g5.length;
-					while(_g7 < _g8) {
-						let i = _g7++;
-						let n = _g5[i];
+					let result = new Array(_g6.length);
+					let _g8 = 0;
+					let _g9 = _g6.length;
+					while(_g8 < _g9) {
+						let i = _g8++;
+						let n = _g6[i];
 						let _g = n.getProperty("name");
 						let _g1 = n.getProperty("required") == "true";
-						let _g2 = n.getProperty("type") != null ? n.getProperty("type") : "String";
-						let _g3 = n.type;
+						let _g2 = n.type;
+						let _g3 = _g2._hx_index == 0 && _g2.name == "IdProperty";
+						let _g4 = n.getProperty("type") != null ? n.getProperty("type") : "String";
+						let _g5 = n.type;
 						let tmp;
-						if(_g3._hx_index == 0) {
-							if(_g3.name == "EnumProperty") {
+						if(_g5._hx_index == 0) {
+							if(_g5.name == "EnumProperty") {
 								let _this = n.children;
 								let _g = [];
 								let _g1 = 0;
@@ -1588,31 +1618,31 @@ class boxup_cli_DefinitionGenerator {
 						} else {
 							tmp = [];
 						}
-						result[i] = new boxup_cli_PropertyDefinition(_g,_g1,_g2,tmp);
+						result[i] = new boxup_cli_PropertyDefinition(_g,_g3,_g1,_g4,tmp);
 					}
-					blocks.push(new boxup_cli_BlockDefinition(_g2,_g3,_g4,result));
+					blocks.push(new boxup_cli_BlockDefinition(_g2,_g4,_g3,_g5,result));
 					break;
 				case "Root":
 					let _this1 = node.children;
-					let _g9 = [];
-					let _g10 = 0;
-					while(_g10 < _this1.length) {
-						let v = _this1[_g10];
-						++_g10;
+					let _g10 = [];
+					let _g11 = 0;
+					while(_g11 < _this1.length) {
+						let v = _this1[_g11];
+						++_g11;
 						let _g = v.type;
 						if(_g._hx_index == 0 && _g.name == "Child") {
-							_g9.push(v);
+							_g10.push(v);
 						}
 					}
-					let result1 = new Array(_g9.length);
-					let _g11 = 0;
-					let _g12 = _g9.length;
-					while(_g11 < _g12) {
-						let i = _g11++;
-						let n = _g9[i];
-						result1[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
+					let result1 = new Array(_g10.length);
+					let _g12 = 0;
+					let _g13 = _g10.length;
+					while(_g12 < _g13) {
+						let i = _g12++;
+						let n = _g10[i];
+						result1[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("symbol"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
 					}
-					blocks.push(new boxup_cli_BlockDefinition("@root",null,result1,[]));
+					blocks.push(new boxup_cli_BlockDefinition("@root",null,null,result1,[]));
 					break;
 				default:
 				}
@@ -1791,6 +1821,26 @@ class haxe_Exception extends Error {
 		this.message = message;
 		this.__previousException = previous;
 		this.__nativeException = native != null ? native : this;
+		this.__skipStack = 0;
+		let old = Error.prepareStackTrace;
+		Error.prepareStackTrace = function(e) { return e.stack; }
+		if(((native) instanceof Error)) {
+			this.stack = native.stack;
+		} else {
+			let e = null;
+			if(Error.captureStackTrace) {
+				Error.captureStackTrace(this,haxe_Exception);
+				e = this;
+			} else {
+				e = new Error();
+				if(typeof(e.stack) == "undefined") {
+					try { throw e; } catch(_) {}
+					this.__skipStack++;
+				}
+			}
+			this.stack = e.stack;
+		}
+		Error.prepareStackTrace = old;
 	}
 	unwrap() {
 		return this.__nativeException;
@@ -1798,11 +1848,58 @@ class haxe_Exception extends Error {
 	toString() {
 		return this.get_message();
 	}
+	details() {
+		if(this.get_previous() == null) {
+			let tmp = "Exception: " + this.toString();
+			let tmp1 = this.get_stack();
+			return tmp + (tmp1 == null ? "null" : haxe_CallStack.toString(tmp1));
+		} else {
+			let result = "";
+			let e = this;
+			let prev = null;
+			while(e != null) {
+				if(prev == null) {
+					let result1 = "Exception: " + e.get_message();
+					let tmp = e.get_stack();
+					result = result1 + (tmp == null ? "null" : haxe_CallStack.toString(tmp)) + result;
+				} else {
+					let prevStack = haxe_CallStack.subtract(e.get_stack(),prev.get_stack());
+					result = "Exception: " + e.get_message() + (prevStack == null ? "null" : haxe_CallStack.toString(prevStack)) + "\n\nNext " + result;
+				}
+				prev = e;
+				e = e.get_previous();
+			}
+			return result;
+		}
+	}
+	__shiftStack() {
+		this.__skipStack++;
+	}
 	get_message() {
 		return this.message;
 	}
+	get_previous() {
+		return this.__previousException;
+	}
 	get_native() {
 		return this.__nativeException;
+	}
+	get_stack() {
+		let _g = this.__exceptionStack;
+		if(_g == null) {
+			let value = haxe_NativeStackTrace.toHaxe(haxe_NativeStackTrace.normalize(this.stack),this.__skipStack);
+			this.setProperty("__exceptionStack",value);
+			return value;
+		} else {
+			return _g;
+		}
+	}
+	setProperty(name,value) {
+		try {
+			Object.defineProperty(this,name,{ value : value});
+		} catch( _g ) {
+			this[name] = value;
+		}
 	}
 	static caught(value) {
 		if(((value) instanceof haxe_Exception)) {
@@ -1820,6 +1917,7 @@ class haxe_Exception extends Error {
 			return value;
 		} else {
 			let e = new haxe_ValueException(value);
+			e.__skipStack++;
 			return e;
 		}
 	}
@@ -1831,6 +1929,7 @@ Object.assign(haxe_Exception.prototype, {
 class capsule_MappingNotFoundException extends haxe_Exception {
 	constructor(id) {
 		super("Mapping not found: " + id);
+		this.__skipStack++;
 	}
 }
 capsule_MappingNotFoundException.__name__ = "capsule.MappingNotFoundException";
@@ -1848,6 +1947,7 @@ capsule_Provider.__constructs__ = [capsule_Provider.ProvideNone,capsule_Provider
 class capsule_ProviderAlreadyExistsException extends haxe_Exception {
 	constructor(id,previous) {
 		super("A provider already exists for this mapping: " + id,previous);
+		this.__skipStack++;
 	}
 }
 capsule_ProviderAlreadyExistsException.__name__ = "capsule.ProviderAlreadyExistsException";
@@ -1861,6 +1961,7 @@ class capsule_ProviderDoesNotExistException extends haxe_Exception {
 			message += " " + reason;
 		}
 		super(message,previous);
+		this.__skipStack++;
 	}
 }
 capsule_ProviderDoesNotExistException.__name__ = "capsule.ProviderDoesNotExistException";
@@ -2049,7 +2150,18 @@ class comicbox_diagnostic_DiagnosticManager {
 		this.collection = Vscode.languages.createDiagnosticCollection("boxup");
 	}
 	register(context) {
+		let _gthis = this;
 		context.subscriptions.push(this.collection);
+		Vscode.workspace.onDidChangeTextDocument(function(change) {
+			if(comicbox_Util.isBoxupDocument(change.document)) {
+				_gthis.clear(change.document.uri);
+			}
+		});
+		Vscode.workspace.onDidCloseTextDocument(function(document) {
+			if(comicbox_Util.isBoxupDocument(document)) {
+				_gthis.remove(document.uri);
+			}
+		});
 	}
 	clear(uri) {
 		this.collection.set(uri,[]);
@@ -2065,6 +2177,10 @@ class comicbox_diagnostic_DiagnosticManager {
 		while(_g < _g1.length) {
 			let error = _g1[_g];
 			++_g;
+			if(error.pos.file.startsWith("<")) {
+				Vscode.window.showErrorMessage(error.toString());
+				return;
+			}
 			let uri = vscode_Uri.parse(error.pos.file);
 			let path = uri.toString();
 			let editor = comicbox_Util.getEditorByUri(uri);
@@ -2141,6 +2257,24 @@ class comicbox_document_DocumentManager {
 		this.reporter = reporter;
 		this.definitions = definitions;
 	}
+	register(context) {
+		let _gthis = this;
+		Vscode.workspace.onDidChangeTextDocument(function(change) {
+			if(comicbox_Util.isBoxupDocument(change.document)) {
+				_gthis.parseDocument(change.document);
+			}
+		});
+		Vscode.workspace.onDidCloseTextDocument(function(document) {
+			if(comicbox_Util.isBoxupDocument(document)) {
+				_gthis.removeDocument(document.uri.toString());
+			}
+		});
+		Vscode.window.onDidChangeActiveTextEditor(function(change) {
+			if(comicbox_Util.isBoxupDocument(change.document)) {
+				_gthis.parseDocument(change.document);
+			}
+		});
+	}
 	getDocument(uri) {
 		return this.parsedDocuments.h[uri];
 	}
@@ -2153,6 +2287,7 @@ class comicbox_document_DocumentManager {
 	parseDocument(document) {
 		let _gthis = this;
 		let source = new boxup_Source(document.uri.toString(),document.getText());
+		console.log("src/comicbox/document/DocumentManager.hx:59:",source);
 		let result = boxup_OutcomeTools.map(boxup_OutcomeTools.map(boxup_OutcomeTools.map(source.tokens,function(tokens) {
 			return new boxup_Parser(tokens).parse();
 		}),function(nodes) {
@@ -2191,6 +2326,10 @@ class comicbox_document_DocumentModule {
 			return new comicbox_document_DocumentManager(c.getMappingByIdentifier("boxup.Reporter").getValue(c),c.getMappingByIdentifier("comicbox.definition.DefintionManager").getValue(c));
 		});
 		container.addMapping(new capsule_Mapping("comicbox.document.DocumentManager")).toProvider(tmp).asShared();
+		container.getMappingByIdentifier("comicbox.core.PluginManager").extend(function(manager) {
+			manager.add(container.getMappingByIdentifier("comicbox.document.DocumentManager").getValue(container));
+			return manager;
+		});
 	}
 }
 comicbox_document_DocumentModule.__name__ = "comicbox.document.DocumentModule";
@@ -2261,18 +2400,16 @@ class comicbox_generator_HtmlGenerator {
 			}
 			break;
 		case 1:
-			return this.el("li",new haxe_ds_StringMap(),this.generateNodes(node.children,wrapParagraph));
-		case 2:
 			let _this = node.children;
 			let result = new Array(_this.length);
 			let _g9 = 0;
-			let _g10 = _this.length;
-			while(_g9 < _g10) {
+			let _g11 = _this.length;
+			while(_g9 < _g11) {
 				let i = _g9++;
 				result[i] = this.generateNode(_this[i],false);
 			}
 			return result.join("");
-		case 3:
+		case 2:
 			return StringTools.htmlEscape(node.textContent);
 		}
 	}
@@ -2293,10 +2430,10 @@ class comicbox_generator_HtmlGenerator {
 			}
 		}
 		let _g1 = [];
-		let _g2 = 0;
-		while(_g2 < _g.length) {
-			let v = _g[_g2];
-			++_g2;
+		let _g11 = 0;
+		while(_g11 < _g.length) {
+			let v = _g[_g11];
+			++_g11;
 			if(v != null) {
 				_g1.push(v);
 			}
@@ -2325,6 +2462,10 @@ class comicbox_generator_PdfGenerator {
 		this.pageCount = 0;
 		let doc = new PDFDocument({ compress : false, size : "LETTER", margins : { top : 30, left : 20, bottom : 30, right : 20}});
 		let buffer = new comicbox_generator_PdfGeneratorStream();
+		let root = haxe_io_Path.directory(__filename);
+		doc.registerFont("Default",haxe_io_Path.join([root,"assets","fonts","CourierPrime-Regular.ttf"]));
+		doc.registerFont("Bold",haxe_io_Path.join([root,"assets","fonts","CourierPrime-Bold.ttf"]));
+		doc.registerFont("Italic",haxe_io_Path.join([root,"assets","fonts","CourierPrime-Italic.ttf"]));
 		doc.pipe(buffer);
 		this.generateNodes(nodes,doc,{ });
 		doc.end();
@@ -2339,14 +2480,17 @@ class comicbox_generator_PdfGenerator {
 		switch(_g._hx_index) {
 		case 0:
 			switch(_g.name) {
+			case "@bold":case "@italic":case "@underlined":
+				this.generateNodes(node.children,doc,style);
+				break;
 			case "Attached":
-				doc.moveDown().text("(attached)",style).moveDown();
+				doc.text("(attached) ",style);
 				this.generateNodes(node.children,doc,style);
 				break;
 			case "Comic":
 				doc.info.title = node.getProperty("title");
 				doc.info.author = node.getProperty("author");
-				doc.text(node.getProperty("title"),{ align : "center"}).moveDown().moveDown().text("Author: " + node.getProperty("author"),{ align : "center"});
+				doc.font("Bold",null,20).text(node.getProperty("title"),{ align : "center"}).moveDown(4).font("Bold",null,12).text("Author: " + node.getProperty("author"),{ align : "center"});
 				break;
 			case "Dialog":
 				doc.moveDown().text(node.getProperty("character").toUpperCase(),{ align : "center"});
@@ -2355,30 +2499,59 @@ class comicbox_generator_PdfGenerator {
 			case "Page":
 				this.pageCount++;
 				this.panelCount = 0;
-				doc.addPage();
-				this.generateNodes(node.children,doc,style);
+				doc.addPage().font("Bold",null,12).text("PAGE " + this.pageCount).moveDown(2);
+				this.generateNodes(node.children,doc,{ });
 				break;
 			case "Panel":
 				this.panelCount++;
-				doc.text(("Panel " + this.pageCount + "." + this.panelCount).toUpperCase()).moveDown();
-				this.generateNodes(node.children,doc,style);
+				doc.font("Bold",null,12).text(("Panel " + this.pageCount + "." + this.panelCount).toUpperCase()).moveDown();
+				this.generateNodes(node.children,doc,{ });
 				doc.moveDown();
 				break;
 			case "Sfx":
-				doc.moveDown().text(node.getProperty("note","Sfx").toUpperCase(),{ align : "center"});
+				doc.moveDown().text("SFX (" + node.getProperty("note","sound") + ")",{ align : "center"});
 				this.generateNodes(node.children,doc,{ align : "center"});
 				break;
 			default:
 			}
 			break;
-		case 2:
-			this.generateNodes(node.children,doc,style);
+		case 1:
+			let text = [];
+			let _g1 = 0;
+			let _g2 = node.children;
+			while(_g1 < _g2.length) {
+				let child = _g2[_g1];
+				++_g1;
+				let _g = child.type;
+				switch(_g._hx_index) {
+				case 0:
+					switch(_g.name) {
+					case "@bold":case "@italic":case "@underlined":
+						let _g3 = 0;
+						let _g4 = child.children;
+						while(_g3 < _g4.length) {
+							let c = _g4[_g3];
+							++_g3;
+							if(c.type._hx_index == 2) {
+								text.push(c.textContent);
+							}
+						}
+						break;
+					default:
+					}
+					break;
+				case 2:
+					text.push(child.textContent);
+					break;
+				default:
+				}
+			}
+			doc.font("Default",null,12).text(text.join(""),style);
 			doc.moveDown();
 			break;
-		case 3:
+		case 2:
 			doc.text(node.textContent,style);
 			break;
-		default:
 		}
 	}
 }
@@ -2391,11 +2564,6 @@ class comicbox_generator_PdfGeneratorStream extends js_node_stream_Writable {
 	constructor() {
 		super(js_node_stream_WritableNewOptionsAdapter.from({ }));
 		this.chunks = [];
-		let _gthis = this;
-		this.once("finish",function() {
-			console.log("src/comicbox/generator/PdfGeneratorStream.hx:14:","Pdf Done?");
-			console.log("src/comicbox/generator/PdfGeneratorStream.hx:15:",_gthis.chunks.length);
-		});
 	}
 	_write(chunk,encoding,callback) {
 		this.chunks.push(chunk);
@@ -2664,6 +2832,238 @@ comicbox_render_RenderModule.__name__ = "comicbox.render.RenderModule";
 Object.assign(comicbox_render_RenderModule.prototype, {
 	__class__: comicbox_render_RenderModule
 });
+var haxe_StackItem = $hxEnums["haxe.StackItem"] = { __ename__:true,__constructs__:null
+	,CFunction: {_hx_name:"CFunction",_hx_index:0,__enum__:"haxe.StackItem",toString:$estr}
+	,Module: ($_=function(m) { return {_hx_index:1,m:m,__enum__:"haxe.StackItem",toString:$estr}; },$_._hx_name="Module",$_.__params__ = ["m"],$_)
+	,FilePos: ($_=function(s,file,line,column) { return {_hx_index:2,s:s,file:file,line:line,column:column,__enum__:"haxe.StackItem",toString:$estr}; },$_._hx_name="FilePos",$_.__params__ = ["s","file","line","column"],$_)
+	,Method: ($_=function(classname,method) { return {_hx_index:3,classname:classname,method:method,__enum__:"haxe.StackItem",toString:$estr}; },$_._hx_name="Method",$_.__params__ = ["classname","method"],$_)
+	,LocalFunction: ($_=function(v) { return {_hx_index:4,v:v,__enum__:"haxe.StackItem",toString:$estr}; },$_._hx_name="LocalFunction",$_.__params__ = ["v"],$_)
+};
+haxe_StackItem.__constructs__ = [haxe_StackItem.CFunction,haxe_StackItem.Module,haxe_StackItem.FilePos,haxe_StackItem.Method,haxe_StackItem.LocalFunction];
+class haxe_CallStack {
+	static toString(stack) {
+		let b = new StringBuf();
+		let _g = 0;
+		let _g1 = stack;
+		while(_g < _g1.length) {
+			let s = _g1[_g++];
+			b.b += "\nCalled from ";
+			haxe_CallStack.itemToString(b,s);
+		}
+		return b.b;
+	}
+	static subtract(this1,stack) {
+		let startIndex = -1;
+		let i = -1;
+		while(++i < this1.length) {
+			let _g = 0;
+			let _g1 = stack.length;
+			while(_g < _g1) if(haxe_CallStack.equalItems(this1[i],stack[_g++])) {
+				if(startIndex < 0) {
+					startIndex = i;
+				}
+				++i;
+				if(i >= this1.length) {
+					break;
+				}
+			} else {
+				startIndex = -1;
+			}
+			if(startIndex >= 0) {
+				break;
+			}
+		}
+		if(startIndex >= 0) {
+			return this1.slice(0,startIndex);
+		} else {
+			return this1;
+		}
+	}
+	static equalItems(item1,item2) {
+		if(item1 == null) {
+			if(item2 == null) {
+				return true;
+			} else {
+				return false;
+			}
+		} else {
+			switch(item1._hx_index) {
+			case 0:
+				if(item2 == null) {
+					return false;
+				} else if(item2._hx_index == 0) {
+					return true;
+				} else {
+					return false;
+				}
+				break;
+			case 1:
+				if(item2 == null) {
+					return false;
+				} else if(item2._hx_index == 1) {
+					return item1.m == item2.m;
+				} else {
+					return false;
+				}
+				break;
+			case 2:
+				if(item2 == null) {
+					return false;
+				} else if(item2._hx_index == 2) {
+					if(item1.file == item2.file && item1.line == item2.line && item1.column == item2.column) {
+						return haxe_CallStack.equalItems(item1.s,item2.s);
+					} else {
+						return false;
+					}
+				} else {
+					return false;
+				}
+				break;
+			case 3:
+				if(item2 == null) {
+					return false;
+				} else if(item2._hx_index == 3) {
+					if(item1.classname == item2.classname) {
+						return item1.method == item2.method;
+					} else {
+						return false;
+					}
+				} else {
+					return false;
+				}
+				break;
+			case 4:
+				if(item2 == null) {
+					return false;
+				} else if(item2._hx_index == 4) {
+					return item1.v == item2.v;
+				} else {
+					return false;
+				}
+				break;
+			}
+		}
+	}
+	static itemToString(b,s) {
+		switch(s._hx_index) {
+		case 0:
+			b.b += "a C function";
+			break;
+		case 1:
+			let _g = s.m;
+			b.b = (b.b += "module ") + (_g == null ? "null" : "" + _g);
+			break;
+		case 2:
+			let _g1 = s.s;
+			let _g2 = s.file;
+			let _g3 = s.line;
+			let _g4 = s.column;
+			if(_g1 != null) {
+				haxe_CallStack.itemToString(b,_g1);
+				b.b += " (";
+			}
+			b.b = (b.b += _g2 == null ? "null" : "" + _g2) + " line ";
+			b.b += _g3 == null ? "null" : "" + _g3;
+			if(_g4 != null) {
+				b.b = (b.b += " column ") + (_g4 == null ? "null" : "" + _g4);
+			}
+			if(_g1 != null) {
+				b.b += ")";
+			}
+			break;
+		case 3:
+			let _g5 = s.classname;
+			let _g6 = s.method;
+			b.b = (b.b += Std.string(_g5 == null ? "<unknown>" : _g5)) + ".";
+			b.b += _g6 == null ? "null" : "" + _g6;
+			break;
+		case 4:
+			let _g7 = s.v;
+			b.b = (b.b += "local function #") + (_g7 == null ? "null" : "" + _g7);
+			break;
+		}
+	}
+}
+class haxe_NativeStackTrace {
+	static toHaxe(s,skip) {
+		if(skip == null) {
+			skip = 0;
+		}
+		if(s == null) {
+			return [];
+		} else if(typeof(s) == "string") {
+			let stack = s.split("\n");
+			if(stack[0] == "Error") {
+				stack.shift();
+			}
+			let m = [];
+			let _g = 0;
+			let _g1 = stack.length;
+			while(_g < _g1) {
+				let i = _g++;
+				if(skip > i) {
+					continue;
+				}
+				let line = stack[i];
+				let matched = line.match(/^    at ([A-Za-z0-9_. ]+) \(([^)]+):([0-9]+):([0-9]+)\)$/);
+				if(matched != null) {
+					let path = matched[1].split(".");
+					if(path[0] == "$hxClasses") {
+						path.shift();
+					}
+					let meth = path.pop();
+					let file = matched[2];
+					let line = Std.parseInt(matched[3]);
+					let column = Std.parseInt(matched[4]);
+					m.push(haxe_StackItem.FilePos(meth == "Anonymous function" ? haxe_StackItem.LocalFunction() : meth == "Global code" ? null : haxe_StackItem.Method(path.join("."),meth),file,line,column));
+				} else {
+					m.push(haxe_StackItem.Module(StringTools.trim(line)));
+				}
+			}
+			return m;
+		} else if(skip > 0 && Array.isArray(s)) {
+			return s.slice(skip);
+		} else {
+			return s;
+		}
+	}
+	static normalize(stack,skipItems) {
+		if(skipItems == null) {
+			skipItems = 0;
+		}
+		if(Array.isArray(stack) && skipItems > 0) {
+			return stack.slice(skipItems);
+		} else if(typeof(stack) == "string") {
+			switch(stack.substring(0,6)) {
+			case "Error\n":case "Error:":
+				++skipItems;
+				break;
+			default:
+			}
+			return haxe_NativeStackTrace.skipLines(stack,skipItems);
+		} else {
+			return stack;
+		}
+	}
+	static skipLines(stack,skip,pos) {
+		if(pos == null) {
+			pos = 0;
+		}
+		while(true) if(skip > 0) {
+			pos = stack.indexOf("\n",pos);
+			if(pos < 0) {
+				return "";
+			} else {
+				skip = --skip;
+				pos += 1;
+				continue;
+			}
+		} else {
+			return stack.substring(pos);
+		}
+	}
+}
+haxe_NativeStackTrace.__name__ = "haxe.NativeStackTrace";
 class haxe_Resource {
 	static getString(name) {
 		let _g = 0;
@@ -2686,6 +3086,7 @@ class haxe_ValueException extends haxe_Exception {
 	constructor(value,previous,native) {
 		super(String(value),previous,native);
 		this.value = value;
+		this.__skipStack++;
 	}
 	unwrap() {
 		return this.value;
@@ -2920,10 +3321,126 @@ class haxe_io_Path {
 		s.ext = null;
 		return s.toString();
 	}
+	static directory(path) {
+		let s = new haxe_io_Path(path);
+		if(s.dir == null) {
+			return "";
+		}
+		return s.dir;
+	}
 	static withExtension(path,ext) {
 		let s = new haxe_io_Path(path);
 		s.ext = ext;
 		return s.toString();
+	}
+	static join(paths) {
+		let _g = [];
+		let _g1 = 0;
+		while(_g1 < paths.length) {
+			let v = paths[_g1];
+			++_g1;
+			if(v != null && v != "") {
+				_g.push(v);
+			}
+		}
+		if(_g.length == 0) {
+			return "";
+		}
+		let path = _g[0];
+		let _g2 = 1;
+		let _g3 = _g.length;
+		while(_g2 < _g3) {
+			path = haxe_io_Path.addTrailingSlash(path);
+			path += _g[_g2++];
+		}
+		return haxe_io_Path.normalize(path);
+	}
+	static normalize(path) {
+		let slash = "/";
+		path = path.split("\\").join(slash);
+		if(path == slash) {
+			return slash;
+		}
+		let target = [];
+		let _g = 0;
+		let _g1 = path.split(slash);
+		while(_g < _g1.length) {
+			let token = _g1[_g];
+			++_g;
+			if(token == ".." && target.length > 0 && target[target.length - 1] != "..") {
+				target.pop();
+			} else if(token == "") {
+				if(target.length > 0 || HxOverrides.cca(path,0) == 47) {
+					target.push(token);
+				}
+			} else if(token != ".") {
+				target.push(token);
+			}
+		}
+		let acc_b = "";
+		let colon = false;
+		let slashes = false;
+		let _g2_offset = 0;
+		let _g2_s = target.join(slash);
+		while(_g2_offset < _g2_s.length) {
+			let s = _g2_s;
+			let index = _g2_offset++;
+			let c = s.charCodeAt(index);
+			if(c >= 55296 && c <= 56319) {
+				c = c - 55232 << 10 | s.charCodeAt(index + 1) & 1023;
+			}
+			let c1 = c;
+			if(c1 >= 65536) {
+				++_g2_offset;
+			}
+			let c2 = c1;
+			switch(c2) {
+			case 47:
+				if(!colon) {
+					slashes = true;
+				} else {
+					let i = c2;
+					colon = false;
+					if(slashes) {
+						acc_b += "/";
+						slashes = false;
+					}
+					acc_b += String.fromCodePoint(i);
+				}
+				break;
+			case 58:
+				acc_b += ":";
+				colon = true;
+				break;
+			default:
+				let i = c2;
+				colon = false;
+				if(slashes) {
+					acc_b += "/";
+					slashes = false;
+				}
+				acc_b += String.fromCodePoint(i);
+			}
+		}
+		return acc_b;
+	}
+	static addTrailingSlash(path) {
+		if(path.length == 0) {
+			return "/";
+		}
+		let c1 = path.lastIndexOf("/");
+		let c2 = path.lastIndexOf("\\");
+		if(c1 < c2) {
+			if(c2 != path.length - 1) {
+				return path + "\\";
+			} else {
+				return path;
+			}
+		} else if(c1 != path.length - 1) {
+			return path + "/";
+		} else {
+			return path;
+		}
 	}
 }
 haxe_io_Path.__name__ = "haxe.io.Path";
@@ -3098,11 +3615,11 @@ if( String.fromCodePoint == null ) String.fromCodePoint = function(c) { return c
 	String.__name__ = "String";
 	Array.__name__ = "Array";
 }
-haxe_Resource.content = [{ name : "comic", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPUNvbWljIHJlcXVpcmVkPXRydWUgbXVsdGlwbGU9ZmFsc2VdDQogIFtDaGlsZCBuYW1lPUluZm9dDQogIFtDaGlsZCBuYW1lPVBhZ2VdDQogIFtDaGlsZCBuYW1lPVNjZW5lXQ0KDQpbQmxvY2sgbmFtZT1Db21pY10NCiAgW1Byb3BlcnR5IG5hbWU9dGl0bGUgcmVxdWlyZWQ9dHJ1ZV0NCiAgW1Byb3BlcnR5IG5hbWU9YXV0aG9yIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPXZlcnNpb24gdHlwZT1JbnRdDQogIFtQcm9wZXJ0eSBuYW1lPWRhdGVdDQogIFtQcm9wZXJ0eSBuYW1lPWZpcnN0UGFnZU51bWJlciB0eXBlPUludF0NCiAgW0VudW1Qcm9wZXJ0eSBuYW1lPXN0YXR1cyByZXF1aXJlZD10cnVlXQ0KICAgIFtPcHRpb24gdmFsdWU9UHVibGlzaGVkXQ0KICAgIFtPcHRpb24gdmFsdWU9RHJhZnRdDQoNCltCbG9jayBuYW1lPUluZm9dDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPVBhcmFncmFwaCBraW5kPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlua10NCg0KW0Jsb2NrIG5hbWU9U2NlbmVdDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlIHJlcXVpcmVkPXRydWVdDQoNCltCbG9jayBuYW1lPVBhZ2VdDQogIFtDaGlsZCBuYW1lPUluZm9dDQogIFtDaGlsZCBuYW1lPVBhbmVsXQ0KDQpbQmxvY2sgbmFtZT1QYW5lbF0NCiAgW0NoaWxkIG5hbWU9RGlhbG9nXQ0KICBbQ2hpbGQgbmFtZT1TZnhdDQogIFtDaGlsZCBuYW1lPUluZm9dDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9RGlhbG9nXQ0KICBbUHJvcGVydHkgbmFtZT1jaGFyYWN0ZXIgcmVxdWlyZWQ9dHJ1ZV0NCiAgW1Byb3BlcnR5IG5hbWU9bW9kaWZpZXJdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaCByZXF1aXJlZD10cnVlXQ0KICBbQ2hpbGQgbmFtZT1Nb29kXQ0KICBbQ2hpbGQgbmFtZT1BdHRhY2hlZF0NCg0KW0Jsb2NrIG5hbWU9U2Z4XQ0KICBbUHJvcGVydHkgbmFtZT1ub3RlXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPUxpbmsga2luZD1UYWddDQogIFtQcm9wZXJ0eSBuYW1lPXVybCByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1Nb29kIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPUF0dGFjaGVkIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPUxpc3RdDQogIFtFbnVtUHJvcGVydHkgbmFtZT10eXBlXQ0KICAgIFtPcHRpb24gdmFsdWU9T3JkZXJlZF0NCiAgICBbT3B0aW9uIHZhbHVlPVVub3JkZXJlZF0NCiAgW0NoaWxkIG5hbWU9SXRlbSByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1JdGVtIGtpbmQ9QXJyb3ddDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg"},{ name : "note", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPU5vdGUgcmVxdWlyZWQ9dHJ1ZSBtdWx0aXBsZT1mYWxzZV0NCiAgW0NoaWxkIG5hbWU9U2VjdGlvbl0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpbmtdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPU5vdGVdDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPXZlcnNpb25dDQoNCltCbG9jayBuYW1lPVBhcmFncmFwaCBraW5kPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlua10NCiAgW0NoaWxkIG5hbWU9RGV0YWlsXQ0KDQpbQmxvY2sgbmFtZT1MaW5rIGtpbmQ9VGFnXQ0KICBbUHJvcGVydHkgbmFtZT11cmwgcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9RGV0YWlsIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPVNlY3Rpb25dDQogIFtQcm9wZXJ0eSBuYW1lPWlkXQ0KICBbUHJvcGVydHkgbmFtZT10aXRsZV0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPUhlYWRlciBraW5kPVRhZ10NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0KDQpbQmxvY2sgbmFtZT1MaXN0XQ0KICBbRW51bVByb3BlcnR5IG5hbWU9dHlwZV0NCiAgICBbT3B0aW9uIHZhbHVlPU9yZGVyZWRdDQogICAgW09wdGlvbiB2YWx1ZT1Vbm9yZGVyZWRdDQogIFtDaGlsZCBuYW1lPUl0ZW0gcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9SXRlbSBraW5kPUFycm93XQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQo"}];
+haxe_Resource.content = [{ name : "comic", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPUNvbWljIHJlcXVpcmVkPXRydWUgbXVsdGlwbGU9ZmFsc2VdDQogIFtDaGlsZCBuYW1lPUluZm9dDQogIFtDaGlsZCBuYW1lPVBhZ2VdDQogIFtDaGlsZCBuYW1lPVNjZW5lIHN5bWJvbD0nIyddDQoNCltCbG9jayBuYW1lPUNvbWljXQ0KICBbUHJvcGVydHkgbmFtZT10aXRsZSByZXF1aXJlZD10cnVlXQ0KICBbUHJvcGVydHkgbmFtZT1hdXRob3IgcmVxdWlyZWQ9dHJ1ZV0NCiAgW1Byb3BlcnR5IG5hbWU9dmVyc2lvbiB0eXBlPUludF0NCiAgW1Byb3BlcnR5IG5hbWU9ZGF0ZV0NCiAgW1Byb3BlcnR5IG5hbWU9Zmlyc3RQYWdlTnVtYmVyIHR5cGU9SW50XQ0KICBbRW51bVByb3BlcnR5IG5hbWU9c3RhdHVzIHJlcXVpcmVkPXRydWVdDQogICAgW09wdGlvbiB2YWx1ZT1QdWJsaXNoZWRdDQogICAgW09wdGlvbiB2YWx1ZT1EcmFmdF0NCg0KW0Jsb2NrIG5hbWU9SW5mb10NCiAgW1Byb3BlcnR5IG5hbWU9dGl0bGVdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlzdF0NCg0KW0Jsb2NrIG5hbWU9UGFyYWdyYXBoIGtpbmQ9UGFyYWdyYXBoXQ0KICBbQ2hpbGQgbmFtZT1MaW5rXQ0KDQpbQmxvY2sgbmFtZT1TY2VuZV0NCiAgW0lkUHJvcGVydHkgbmFtZT10aXRsZSByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1QYWdlXQ0KICBbQ2hpbGQgbmFtZT1JbmZvXQ0KICBbQ2hpbGQgbmFtZT1QYW5lbF0NCg0KW0Jsb2NrIG5hbWU9UGFuZWxdDQogIFtDaGlsZCBuYW1lPURpYWxvZyBzeW1ib2w9IkAiXQ0KICBbQ2hpbGQgbmFtZT1TZnggc3ltYm9sPSIhIl0NCiAgW0NoaWxkIG5hbWU9SW5mb10NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0KDQpbQmxvY2sgbmFtZT1EaWFsb2ddDQogIFtJZFByb3BlcnR5IG5hbWU9Y2hhcmFjdGVyIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPW1vZGlmaWVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGggcmVxdWlyZWQ9dHJ1ZV0NCiAgW0NoaWxkIG5hbWU9TW9vZF0NCiAgW0NoaWxkIG5hbWU9QXR0YWNoZWQgc3ltYm9sPSImIl0NCg0KW0Jsb2NrIG5hbWU9U2Z4XQ0KICBbSWRQcm9wZXJ0eSBuYW1lPW5vdGVdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9TGluayBraW5kPVRhZ10NCiAgW1Byb3BlcnR5IG5hbWU9dXJsIHJlcXVpcmVkPXRydWVdDQoNCltCbG9jayBuYW1lPU1vb2Qga2luZD1UYWddDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9QXR0YWNoZWQga2luZD1UYWddDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9TGlzdF0NCiAgW0VudW1Qcm9wZXJ0eSBuYW1lPXR5cGVdDQogICAgW09wdGlvbiB2YWx1ZT1PcmRlcmVkXQ0KICAgIFtPcHRpb24gdmFsdWU9VW5vcmRlcmVkXQ0KICBbQ2hpbGQgbmFtZT1JdGVtIHN5bWJvbD0iLSIgcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9SXRlbV0NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0K"},{ name : "note", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPU5vdGUgcmVxdWlyZWQ9dHJ1ZSBtdWx0aXBsZT1mYWxzZV0NCiAgW0NoaWxkIG5hbWU9U2VjdGlvbl0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpbmtdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPU5vdGVdDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPXZlcnNpb25dDQoNCltCbG9jayBuYW1lPVBhcmFncmFwaCBraW5kPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlua10NCiAgW0NoaWxkIG5hbWU9RGV0YWlsXQ0KDQpbQmxvY2sgbmFtZT1MaW5rIGtpbmQ9VGFnXQ0KICBbUHJvcGVydHkgbmFtZT11cmwgcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9RGV0YWlsIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPVNlY3Rpb25dDQogIFtQcm9wZXJ0eSBuYW1lPWlkXQ0KICBbUHJvcGVydHkgbmFtZT10aXRsZV0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPUhlYWRlciBraW5kPVRhZ10NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0KDQpbQmxvY2sgbmFtZT1MaXN0XQ0KICBbRW51bVByb3BlcnR5IG5hbWU9dHlwZV0NCiAgICBbT3B0aW9uIHZhbHVlPU9yZGVyZWRdDQogICAgW09wdGlvbiB2YWx1ZT1Vbm9yZGVyZWRdDQogIFtDaGlsZCBuYW1lPUl0ZW0gc3ltYm9sPSItIiByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1JdGVtXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQo"}];
 js_Boot.__toStr = ({ }).toString;
-boxup_cli_DefinitionGenerator.defaultParagraphChildren = [new boxup_cli_ChildDefinition("@italic",null,null),new boxup_cli_ChildDefinition("@bold",null,null),new boxup_cli_ChildDefinition("@underlined",null,null),new boxup_cli_ChildDefinition("@raw",null,null)];
-boxup_cli_DefinitionGenerator.defaultBlocks = [new boxup_cli_BlockDefinition("@italic","Tag",[],[]),new boxup_cli_BlockDefinition("@bold","Tag",[],[]),new boxup_cli_BlockDefinition("@underlined","Tag",[],[]),new boxup_cli_BlockDefinition("@raw","Tag",[],[])];
-var boxup_cli_DefinitionValidator_validator = new boxup_cli_Definition([new boxup_cli_BlockDefinition("@root",null,[new boxup_cli_ChildDefinition("Root",true,false),new boxup_cli_ChildDefinition("Block",null,null)],[]),new boxup_cli_BlockDefinition("Root",null,[new boxup_cli_ChildDefinition("Child",null,null)],[]),new boxup_cli_BlockDefinition("Block",null,[new boxup_cli_ChildDefinition("Child",null,null),new boxup_cli_ChildDefinition("Property",null,null),new boxup_cli_ChildDefinition("EnumProperty",null,null)],[new boxup_cli_PropertyDefinition("kind",false,"String",["Arrow","Tag","Normal","Paragraph"]),new boxup_cli_PropertyDefinition("name",true,"String",null)]),new boxup_cli_BlockDefinition("Property",null,[],[new boxup_cli_PropertyDefinition("name",true,"String",null),new boxup_cli_PropertyDefinition("type",false,"String",null),new boxup_cli_PropertyDefinition("required",false,"Bool",null),new boxup_cli_PropertyDefinition("default",false,"String",["String","Int","Float","Bool"])]),new boxup_cli_BlockDefinition("EnumProperty",null,[new boxup_cli_ChildDefinition("Option",true,true)],[new boxup_cli_PropertyDefinition("name",true,"String",null),new boxup_cli_PropertyDefinition("type",false,"String",null),new boxup_cli_PropertyDefinition("required",false,"Bool",null),new boxup_cli_PropertyDefinition("default",false,"String",null)]),new boxup_cli_BlockDefinition("Option",null,[],[new boxup_cli_PropertyDefinition("value",true,"String",null)]),new boxup_cli_BlockDefinition("Child",null,[],[new boxup_cli_PropertyDefinition("name",true,"String",null),new boxup_cli_PropertyDefinition("required",false,"Bool",null),new boxup_cli_PropertyDefinition("multiple",false,"Bool",null)])]);
+boxup_cli_DefinitionGenerator.defaultParagraphChildren = [new boxup_cli_ChildDefinition("@italic",null,null,null),new boxup_cli_ChildDefinition("@bold",null,null,null),new boxup_cli_ChildDefinition("@underlined",null,null,null),new boxup_cli_ChildDefinition("@raw",null,null,null)];
+boxup_cli_DefinitionGenerator.defaultBlocks = [new boxup_cli_BlockDefinition("@italic",null,"Tag",[],[]),new boxup_cli_BlockDefinition("@bold",null,"Tag",[],[]),new boxup_cli_BlockDefinition("@underlined",null,"Tag",[],[]),new boxup_cli_BlockDefinition("@raw",null,"Tag",[],[])];
+var boxup_cli_DefinitionValidator_validator = new boxup_cli_Definition([new boxup_cli_BlockDefinition("@root",null,null,[new boxup_cli_ChildDefinition("Root",null,true,false),new boxup_cli_ChildDefinition("Block",null,null,null)],[]),new boxup_cli_BlockDefinition("Root",null,null,[new boxup_cli_ChildDefinition("Child",null,null,null)],[]),new boxup_cli_BlockDefinition("Block",null,null,[new boxup_cli_ChildDefinition("Child",null,null,null),new boxup_cli_ChildDefinition("Property",null,null,null),new boxup_cli_ChildDefinition("IdProperty",null,null,false),new boxup_cli_ChildDefinition("EnumProperty",null,null,null),new boxup_cli_ChildDefinition("RenderHint",null,null,false)],[new boxup_cli_PropertyDefinition("kind",null,false,"String",["Tag","Normal","Paragraph"]),new boxup_cli_PropertyDefinition("name",true,true,"String",null)]),new boxup_cli_BlockDefinition("Property",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null),new boxup_cli_PropertyDefinition("type",null,false,"String",["String","Int","Float","Bool"])]),new boxup_cli_BlockDefinition("IdProperty",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null)]),new boxup_cli_BlockDefinition("EnumProperty",null,null,[new boxup_cli_ChildDefinition("Option",null,true,true)],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null)]),new boxup_cli_BlockDefinition("Option",null,null,[],[new boxup_cli_PropertyDefinition("value",null,true,"String",null)]),new boxup_cli_BlockDefinition("Child",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null),new boxup_cli_PropertyDefinition("multiple",null,false,"Bool",null),new boxup_cli_PropertyDefinition("symbol",null,null,"String",["!","@","#","%","$","&","^","-",":","<",">","?","+"])]),new boxup_cli_BlockDefinition("RenderHint",null,null,[],[new boxup_cli_PropertyDefinition("hint",true,true,null,["Header","SubHeader","Section","ListContainer","ListItem","Link","Image"])])]);
 haxe_crypto_Base64.CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 haxe_crypto_Base64.BYTES = haxe_io_Bytes.ofString(haxe_crypto_Base64.CHARS);
 })(typeof exports != "undefined" ? exports : typeof window != "undefined" ? window : typeof self != "undefined" ? self : this, typeof window != "undefined" ? window : typeof global != "undefined" ? global : typeof self != "undefined" ? self : this);

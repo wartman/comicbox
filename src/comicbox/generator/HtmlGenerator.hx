@@ -3,6 +3,7 @@ package comicbox.generator;
 import boxup.Outcome;
 import boxup.Node;
 import boxup.Generator;
+// import boxup.Builtin;
 
 using StringTools;
 
@@ -53,7 +54,7 @@ class HtmlGenerator implements Generator<String> {
             el('h4', [], [ node.getProperty('character') ])
           ])
         ].concat(generateNodes(node.children)));
-      case Block('Item') | Arrow:
+      case Block('Item'):
         el('li', [], generateNodes(node.children, wrapParagraph));
       case Paragraph:
         node.children.map(n -> generateNode(n, false)).join('');

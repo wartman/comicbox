@@ -9,6 +9,7 @@ import boxup.ErrorCollection;
 import comicbox.core.Plugin;
 
 using comicbox.Util;
+using StringTools;
 
 class DiagnosticManager implements Plugin {
   final collection:DiagnosticCollection;
@@ -19,6 +20,16 @@ class DiagnosticManager implements Plugin {
 
   public function register(context:ExtensionContext) {
     context.subscriptions.push(collection);
+    Vscode.workspace.onDidChangeTextDocument(change -> {
+      if (change.document.isBoxupDocument()) {
+        clear(change.document.uri);
+      }
+    });
+    Vscode.workspace.onDidCloseTextDocument(document -> {
+      if (document.isBoxupDocument()) {
+        remove(document.uri);
+      }
+    });
   }
 
   public function clear(uri:Uri) {
@@ -33,6 +44,11 @@ class DiagnosticManager implements Plugin {
     collection.clear();
     var diags:Map<String, Array<Diagnostic>> = [];
     for (error in errors) {
+      if (error.pos.file.startsWith('<')) {
+        Vscode.window.showErrorMessage(error.toString());
+        return;
+      }
+
       var uri = Uri.parse(error.pos.file);
       var path = uri.toString();
       var editor = uri.getEditorByUri();

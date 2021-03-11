@@ -2,7 +2,7 @@
   [Child name=Comic required=true multiple=false]
   [Child name=Info]
   [Child name=Page]
-  [Child name=Scene]
+  [Child name=Scene symbol='#']
 
 [Block name=Comic]
   [Property name=title required=true]
@@ -23,27 +23,27 @@
   [Child name=Link]
 
 [Block name=Scene]
-  [Property name=title required=true]
+  [IdProperty name=title required=true]
 
 [Block name=Page]
   [Child name=Info]
   [Child name=Panel]
 
 [Block name=Panel]
-  [Child name=Dialog]
-  [Child name=Sfx]
+  [Child name=Dialog symbol="@"]
+  [Child name=Sfx symbol="!"]
   [Child name=Info]
   [Child name=Paragraph]
 
 [Block name=Dialog]
-  [Property name=character required=true]
+  [IdProperty name=character required=true]
   [Property name=modifier]
   [Child name=Paragraph required=true]
   [Child name=Mood]
-  [Child name=Attached]
+  [Child name=Attached symbol="&"]
 
 [Block name=Sfx]
-  [Property name=note]
+  [IdProperty name=note]
   [Child name=Paragraph]
 
 [Block name=Link kind=Tag]
@@ -59,7 +59,7 @@
   [EnumProperty name=type]
     [Option value=Ordered]
     [Option value=Unordered]
-  [Child name=Item required=true]
+  [Child name=Item symbol="-" required=true]
 
-[Block name=Item kind=Arrow]
+[Block name=Item]
   [Child name=Paragraph]

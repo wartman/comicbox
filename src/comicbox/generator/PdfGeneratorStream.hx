@@ -10,10 +10,6 @@ class PdfGeneratorStream extends Writable<PdfGeneratorStream> {
   public function new() {
     super({});
     chunks = [];
-    once('finish', () -> {
-      trace('Pdf Done?');
-      trace(chunks.length);
-    });
   }
 
   override function _write(chunk:Dynamic, encoding:String, callback:Null<Error> -> Void) {
