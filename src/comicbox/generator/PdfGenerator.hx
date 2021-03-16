@@ -1,5 +1,6 @@
 package comicbox.generator;
 
+import boxup.Source;
 import boxup.Builtin;
 import boxup.Outcome;
 import boxup.Node;
@@ -14,7 +15,7 @@ class PdfGenerator implements Generator<PdfGeneratorStream> {
 
   public function new() {}
   
-  public function generate(nodes:Array<Node>):Outcome<PdfGeneratorStream> {
+  public function generate(nodes:Array<Node>, source:Source):Outcome<PdfGeneratorStream> {
     panelCount = 0;
     pageCount = 0;
 
@@ -109,11 +110,11 @@ class PdfGenerator implements Generator<PdfGeneratorStream> {
         generateNodes(node.children, doc, style);
       
       case Paragraph:
-        // For now we're ignoreing bold/italic/etc
+        // For now we're ignoring bold/italic/etc
         var text:Array<String> = [];
         for (child in node.children) switch child.type {
           case Text: text.push(child.textContent);
-          case Block(BItalic) | Block(BBold) | Block(BUnderlined):
+          case Block(BItalic) | Block(BBold):
             for (c in child.children) switch c.type {
               case Text: text.push(c.textContent);
               default: // hm
@@ -127,7 +128,7 @@ class PdfGenerator implements Generator<PdfGeneratorStream> {
 
         doc.moveDown();
 
-      case Block(BItalic) | Block(BBold) | Block(BUnderlined):
+      case Block(BItalic) | Block(BBold):
         generateNodes(node.children, doc, style);
 
       case Text:

@@ -1,5 +1,6 @@
 package comicbox.preview;
 
+import boxup.Source;
 import vscode.ExtensionContext;
 import vscode.ViewColumn;
 import vscode.TextDocument;
@@ -25,7 +26,7 @@ class PreviewManager implements Plugin {
     this.extensionUri = extensionUri;
     this.generator = generator;
     this.documents = documents;
-    this.documents.events.event((data) -> updatePreviewForDocument(data.doc, data.nodes));
+    this.documents.events.event((data) -> updatePreviewForDocument(data.doc, data.nodes, data.source));
   }
 
   public function register(context:ExtensionContext) {
@@ -44,14 +45,14 @@ class PreviewManager implements Plugin {
     previews.push(preview);
   }
 
-  public function updatePreviewForDocument(document:TextDocument, nodes:Array<Node>) {
+  public function updatePreviewForDocument(document:TextDocument, nodes:Array<Node>, source:Source) {
     var preview = getPreviewForDocument(document);
     if (preview == null) return;
-    updatePreview(preview, nodes);
+    updatePreview(preview, nodes, source);
   }
 
-  function updatePreview(preview:PreviewPanel, nodes:Array<Node>) {
-    switch generator.generate(nodes) {
+  function updatePreview(preview:PreviewPanel, nodes:Array<Node>, source:Source) {
+    switch generator.generate(nodes, source) {
       case Ok(html): 
         preview.updateHtml(html);
       case Fail(error): 
@@ -98,8 +99,8 @@ class PreviewManager implements Plugin {
       addPreview(preview);
     }
 
-    var nodes = documents.getDocument(document.uri.toString());
-    if (nodes != null) updatePreview(preview, nodes);
+    var doc = documents.getDocument(document.uri.toString());
+    if (doc != null) updatePreview(preview, doc.nodes, doc.source);
   }
 
   public function dispose() {

@@ -1,9 +1,7 @@
 import vscode.Uri;
 import vscode.ExtensionContext;
 import capsule.Container;
-import comicbox.document.DocumentManager;
 import comicbox.document.DocumentModule;
-import comicbox.diagnostic.DiagnosticManager;
 import comicbox.diagnostic.DiagnosticModule;
 import comicbox.core.PluginManager;
 import comicbox.ComicboxModule;

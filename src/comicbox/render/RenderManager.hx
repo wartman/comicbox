@@ -1,14 +1,11 @@
 package comicbox.render;
 
-import js.lib.Error;
-import js.node.Buffer;
 import vscode.Uri;
 import js.node.Fs;
 import js.lib.Promise;
 import vscode.ExtensionContext;
 import boxup.Source;
 import boxup.Compiler;
-import boxup.cli.Writer;
 import vscode.TextDocument;
 import comicbox.generator.PdfGeneratorStream;
 import comicbox.core.Plugin;
@@ -18,12 +15,10 @@ using haxe.io.Path;
 
 class RenderManager implements Plugin {
   final config:ComicboxConfig;
-  final writer:Writer;
   final compiler:Compiler<PdfGeneratorStream>;
 
-  public function new(config, writer, compiler) {
+  public function new(config, compiler) {
     this.config = config;
-    this.writer = writer;
     this.compiler = compiler;
   }
 

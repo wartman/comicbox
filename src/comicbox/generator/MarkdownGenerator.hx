@@ -1,2 +1,0 @@
-package comicbox.generator;
-

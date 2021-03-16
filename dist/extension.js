@@ -203,16 +203,16 @@ class boxup_Compiler {
 	}
 	compile(source) {
 		let _gthis = this;
-		let outcome = boxup_OutcomeTools.map(boxup_OutcomeTools.map(boxup_OutcomeTools.map(source.tokens,function(tokens) {
+		let outcome = boxup_OutcomeTools.map(boxup_OutcomeTools.map(boxup_OutcomeTools.map(source.get_tokens(),function(tokens) {
 			return new boxup_Parser(tokens).parse();
 		}),function(nodes) {
 			if(_gthis.validator == null) {
 				return boxup_Outcome.Ok(nodes);
 			} else {
-				return _gthis.validator.validate(nodes);
+				return _gthis.validator.validate(nodes,source);
 			}
 		}),function(nodes) {
-			return _gthis.generator.generate(nodes);
+			return _gthis.generator.generate(nodes,source);
 		});
 		switch(outcome._hx_index) {
 		case 0:
@@ -247,10 +247,14 @@ var boxup_NodeType = $hxEnums["boxup.NodeType"] = { __ename__:true,__constructs_
 };
 boxup_NodeType.__constructs__ = [boxup_NodeType.Block,boxup_NodeType.Paragraph,boxup_NodeType.Text];
 class boxup_Node {
-	constructor(type,isTag,textContent,properties,children,pos) {
+	constructor(type,id,isTag,textContent,properties,children,pos) {
 		this.textContent = null;
 		this.isTag = false;
+		this.id = null;
 		this.type = type;
+		if(id != null) {
+			this.id = id;
+		}
 		if(isTag != null) {
 			this.isTag = isTag;
 		}
@@ -353,7 +357,7 @@ class boxup_Parser {
 		return this.parseParagraph(indent);
 	}
 	parseRootInline(indent) {
-		if(this.isAtEnd() || this.isNewline(this.peek())) {
+		if(this.isAtEnd() || this.isNewline(this.tokens[this.position])) {
 			return null;
 		}
 		this.ignoreWhitespace();
@@ -373,44 +377,44 @@ class boxup_Parser {
 		this.ignoreWhitespace();
 		let properties = [];
 		let children = [];
+		let id = null;
 		let blockName;
 		let _g = this.symbol();
 		if(_g == null) {
 			let name = this.blockIdentifier();
-			if(this.match(".")) {
-				let value = this.parseValue(true);
-				if(value == null) {
-					throw haxe_Exception.thrown(this.error("Expected an ID",this.peek().pos));
+			if(this.match("/")) {
+				id = this.parseValue(true);
+				if(id == null) {
+					throw haxe_Exception.thrown(this.error("Expected an ID",this.tokens[this.position].pos));
 				}
-				properties.push({ name : "id", value : value, pos : value.pos});
 			}
 			blockName = name;
 		} else {
-			let value = this.parseValue(true);
-			if(value != null) {
-				properties.push({ name : "id", value : value, pos : value.pos});
-			}
+			id = this.parseValue(true);
 			blockName = _g;
 		}
 		this.ignoreWhitespace();
-		if(!this.check("]")) {
+		if(this.tokens[this.position].type != "]") {
 			while(true) {
 				this.ignoreWhitespaceAndNewline();
-				if(this.check("]")) {
+				if(this.tokens[this.position].type == "]") {
 					break;
 				}
 				properties.push(this.parseProperty(true));
-				if(!(!this.isAtEnd() && !this.check("]") && (this.isWhitespace(this.peek()) || this.isNewline(this.peek())))) {
+				if(!(!this.isAtEnd() && this.tokens[this.position].type != "]" && (this.isWhitespace(this.tokens[this.position]) || this.isNewline(this.tokens[this.position])))) {
 					break;
 				}
 			}
 		}
-		this.consume("]");
+		let type = "]";
+		if(!this.match(type)) {
+			throw haxe_Exception.thrown(this.error("Expected a " + type,this.tokens[this.position].pos));
+		}
 		this.ignoreWhitespace();
 		let childIndent = 0;
 		if(!isTag) {
 			this.ignoreWhitespace();
-			if(!this.isNewline(this.peek())) {
+			if(!this.isNewline(this.tokens[this.position])) {
 				children.push(this.parseRootInline(indent));
 			} else if(this.isPropertyBlock(indent)) {
 				while(true) {
@@ -432,7 +436,9 @@ class boxup_Parser {
 					if(!tmp) {
 						break;
 					}
-					properties.push(this.parseProperty(false));
+					if(this.checkIdentifier()) {
+						properties.push(this.parseProperty(false));
+					}
 				}
 			} else {
 				while(true) {
@@ -461,13 +467,13 @@ class boxup_Parser {
 				}
 			}
 		}
-		return new boxup_Node(boxup_NodeType.Block(blockName.value),isTag,null,properties,children,blockName.pos);
+		return new boxup_Node(boxup_NodeType.Block(blockName.value),id,isTag,null,properties,children,blockName.pos);
 	}
 	isPropertyBlock(indent) {
 		let start = this.position;
 		if(this.findIndent() > indent && this.identifier() != null) {
 			this.ignoreWhitespace();
-			if(this.check("=")) {
+			if(this.tokens[this.position].type == "=") {
 				this.position = start;
 				return true;
 			}
@@ -481,47 +487,56 @@ class boxup_Parser {
 		}
 		let name = this.identifier();
 		if(name == null) {
-			throw haxe_Exception.thrown(this.error("Expected an identifier",this.peek().pos));
+			throw haxe_Exception.thrown(this.error("Expected an identifier",this.tokens[this.position].pos));
 		}
 		this.ignoreWhitespace();
-		this.consume("=");
+		let type = "=";
+		if(!this.match(type)) {
+			throw haxe_Exception.thrown(this.error("Expected a " + type,this.tokens[this.position].pos));
+		}
 		this.ignoreWhitespace();
 		let value = this.parseValue(isInBlockDecl);
 		if(value == null) {
-			throw haxe_Exception.thrown(this.error("Expected a value",this.peek().pos));
+			throw haxe_Exception.thrown(this.error("Expected a value",this.tokens[this.position].pos));
 		}
 		return { name : name.value, value : value, pos : name.pos};
 	}
 	parseValue(isInBlockDecl) {
-		let _gthis = this;
-		let tok = this.match("'") ? this.parseString("'") : this.match("\"") ? this.parseString("\"") : isInBlockDecl ? boxup_TokenTools.merge(this.readWhile(function() {
-			return _gthis.check("<text>");
-		})) : boxup_TokenTools.merge(this.readWhile(function() {
-			return !_gthis.isNewline(_gthis.peek());
-		}));
+		let tok;
+		if(this.match("'")) {
+			tok = this.parseString("'");
+		} else if(this.match("\"")) {
+			tok = this.parseString("\"");
+		} else if(isInBlockDecl) {
+			let _g = [];
+			while(!this.isAtEnd() && this.tokens[this.position].type == "<text>") _g.push(this.advance());
+			tok = boxup_TokenTools.merge(_g);
+		} else {
+			let _g = [];
+			while(!this.isAtEnd() && !this.isNewline(this.tokens[this.position])) _g.push(this.advance());
+			tok = boxup_TokenTools.merge(_g);
+		}
 		if(tok == null) {
 			return null;
 		}
 		return { type : this.getType(tok.value), value : tok.value, pos : tok.pos};
 	}
 	parseParagraph(indent) {
-		let start = this.peek();
+		let start = this.tokens[this.position];
 		let children = [];
 		while(true) {
 			if(this.match("<")) {
 				children.push(this.parseTaggedBlock());
-			} else if(this.match("/")) {
-				children.push(this.parseDecoration("@italic","/"));
+			} else if(this.match("_")) {
+				children.push(this.parseDecoration("@italic","_"));
 			} else if(this.match("*")) {
 				children.push(this.parseDecoration("@bold","*"));
 			} else if(this.match("`")) {
 				children.push(this.parseDecoration("@raw","`"));
-			} else if(this.match("_")) {
-				children.push(this.parseDecoration("@underlined","_"));
 			} else {
 				children.push(this.parseTextPart(indent));
 			}
-			if(!(!this.isAtEnd() && !this.isNewline(this.peek()))) {
+			if(!(!this.isAtEnd() && !this.isNewline(this.tokens[this.position]))) {
 				break;
 			}
 		}
@@ -535,33 +550,39 @@ class boxup_Parser {
 				_g1.push(v);
 			}
 		}
-		return new boxup_Node(_g,null,null,[],_g1,boxup_TokenTools.getMergedPos(start,this.previous()));
+		return new boxup_Node(_g,null,null,null,[],_g1,boxup_TokenTools.getMergedPos(start,this.tokens[this.position - 1]));
 	}
 	parseDecoration(name,delimiter) {
-		let _gthis = this;
-		let tok = boxup_TokenTools.merge(this.readWhile(function() {
-			return !_gthis.check(delimiter);
-		}));
-		this.consume(delimiter);
-		return new boxup_Node(boxup_NodeType.Block(name),null,null,[],[new boxup_Node(boxup_NodeType.Text,null,tok.value,[],[],tok.pos)],tok.pos);
+		let _g = [];
+		while(!this.isAtEnd() && this.tokens[this.position].type != delimiter) _g.push(this.advance());
+		let tok = boxup_TokenTools.merge(_g);
+		if(!this.match(delimiter)) {
+			throw haxe_Exception.thrown(this.error("Expected a " + delimiter,this.tokens[this.position].pos));
+		}
+		return new boxup_Node(boxup_NodeType.Block(name),null,null,null,[],[new boxup_Node(boxup_NodeType.Text,null,null,tok.value,[],[],tok.pos)],tok.pos);
 	}
 	parseTaggedBlock() {
-		let _gthis = this;
-		let tagged = boxup_TokenTools.merge(this.readWhile(function() {
-			return !_gthis.check(">");
-		}));
-		this.consume(">");
-		this.consume("[");
+		let _g = [];
+		while(!this.isAtEnd() && this.tokens[this.position].type != ">") _g.push(this.advance());
+		let tagged = boxup_TokenTools.merge(_g);
+		let type = ">";
+		if(!this.match(type)) {
+			throw haxe_Exception.thrown(this.error("Expected a " + type,this.tokens[this.position].pos));
+		}
+		let type1 = "[";
+		if(!this.match(type1)) {
+			throw haxe_Exception.thrown(this.error("Expected a " + type1,this.tokens[this.position].pos));
+		}
 		let block = this.parseBlock(0,true);
-		block.children.push(new boxup_Node(boxup_NodeType.Text,null,tagged.value,[],[],tagged.pos));
+		block.children.push(new boxup_Node(boxup_NodeType.Text,null,null,tagged.value,[],[],tagged.pos));
 		return block;
 	}
 	parseTextPart(indent) {
 		let _gthis = this;
 		let read = function() {
-			return boxup_TokenTools.merge(_gthis.readWhile(function() {
-				return !_gthis.checkAny(["<","*","/","_","`","<newline>"]);
-			}));
+			let _g = [];
+			while(!_gthis.isAtEnd() && !_gthis.checkAny(["<","*","_","`","<newline>"])) _g.push(_gthis.advance());
+			return boxup_TokenTools.merge(_g);
 		};
 		let out = [read()];
 		let readNext = null;
@@ -569,7 +590,7 @@ class boxup_Parser {
 			while(true) {
 				if(!_gthis.isAtEnd()) {
 					let pre = _gthis.position;
-					if(_gthis.isNewline(_gthis.peek())) {
+					if(_gthis.isNewline(_gthis.tokens[_gthis.position])) {
 						_gthis.advance();
 						if(_gthis.findIndentWithoutNewline() >= indent) {
 							if(_gthis.isBlockStart()) {
@@ -595,50 +616,54 @@ class boxup_Parser {
 		};
 		readNext();
 		let tok = boxup_TokenTools.merge(out);
-		return new boxup_Node(boxup_NodeType.Text,null,tok.value,[],[],tok.pos);
+		return new boxup_Node(boxup_NodeType.Text,null,null,tok.value,[],[],tok.pos);
 	}
 	ignoreComment() {
-		let _gthis = this;
-		this.readWhile(function() {
-			return !_gthis.check("/]");
-		});
+		let _g = [];
+		while(!this.isAtEnd() && this.tokens[this.position].type != "/]") _g.push(this.advance());
 		if(!this.isAtEnd()) {
-			this.consume("/]");
+			let type = "/]";
+			if(!this.match(type)) {
+				throw haxe_Exception.thrown(this.error("Expected a " + type,this.tokens[this.position].pos));
+			}
 		}
 	}
 	parseString(delimiter) {
-		let _gthis = this;
-		let out = boxup_TokenTools.merge(this.readWhile(function() {
-			return !_gthis.check(delimiter);
-		}));
+		let _g = [];
+		while(!this.isAtEnd() && this.tokens[this.position].type != delimiter) _g.push(this.advance());
+		let out = boxup_TokenTools.merge(_g);
 		if(this.isAtEnd()) {
 			throw haxe_Exception.thrown(this.error("Unterminated string",out.pos));
 		}
-		this.consume(delimiter);
+		if(!this.match(delimiter)) {
+			throw haxe_Exception.thrown(this.error("Expected a " + delimiter,this.tokens[this.position].pos));
+		}
 		return out;
 	}
 	isBlockStart() {
-		return this.check("[");
+		return this.tokens[this.position].type == "[";
 	}
 	symbol() {
-		switch(this.peek().type) {
-		case "!":case "#":case "$":case "%":case "&":case "*":case "+":case "-":case ":":case "<":case ">":case "?":case "@":case "^":
+		switch(this.tokens[this.position].type) {
+		case "!":case "#":case "$":case "%":case "&":case "*":case "+":case "-":case ".":case ":":case "<":case ">":case "?":case "@":case "^":
 			return this.advance();
 		default:
 			return null;
 		}
 	}
 	blockIdentifier() {
-		if(!this.checkTokenValueStarts(this.peek(),$bind(this,this.isUcAlpha))) {
-			throw haxe_Exception.thrown(this.error("Expected an uppercase identifier",this.peek().pos));
+		if(!this.checkTokenValueStarts(this.tokens[this.position],$bind(this,this.isUcAlpha))) {
+			throw haxe_Exception.thrown(this.error("Expected an uppercase identifier",this.tokens[this.position].pos));
 		}
 		return this.identifier();
 	}
 	identifier() {
-		let _gthis = this;
-		return boxup_TokenTools.merge(this.readWhile(function() {
-			return _gthis.checkTokenValue(_gthis.peek(),$bind(_gthis,_gthis.isAlphaNumeric));
-		}));
+		let _g = [];
+		while(!this.isAtEnd() && this.checkTokenValue(this.tokens[this.position],$bind(this,this.isAlphaNumeric))) _g.push(this.advance());
+		return boxup_TokenTools.merge(_g);
+	}
+	checkIdentifier() {
+		return this.checkTokenValue(this.tokens[this.position],$bind(this,this.isAlphaNumeric));
 	}
 	getType(c) {
 		let _gthis = this;
@@ -673,7 +698,7 @@ class boxup_Parser {
 	}
 	findIndentWithoutNewline() {
 		let found = 0;
-		while(!this.isAtEnd() && this.isWhitespace(this.peek())) {
+		while(!this.isAtEnd() && this.isWhitespace(this.tokens[this.position])) {
 			this.advance();
 			++found;
 		}
@@ -681,27 +706,19 @@ class boxup_Parser {
 	}
 	findIndent() {
 		let found = this.findIndentWithoutNewline();
-		if(!this.isAtEnd() && this.isNewline(this.peek())) {
+		if(!this.isAtEnd() && this.isNewline(this.tokens[this.position])) {
 			this.advance();
 			return this.findIndent();
 		}
 		return found;
 	}
 	ignoreWhitespace() {
-		let _gthis = this;
-		this.readWhile(function() {
-			return _gthis.isWhitespace(_gthis.peek());
-		});
+		let _g = [];
+		while(!this.isAtEnd() && this.isWhitespace(this.tokens[this.position])) _g.push(this.advance());
 	}
 	ignoreWhitespaceAndNewline() {
-		let _gthis = this;
-		this.readWhile(function() {
-			if(!_gthis.isWhitespace(_gthis.peek())) {
-				return _gthis.isNewline(_gthis.peek());
-			} else {
-				return true;
-			}
-		});
+		let _g = [];
+		while(!this.isAtEnd() && (this.isWhitespace(this.tokens[this.position]) || this.isNewline(this.tokens[this.position]))) _g.push(this.advance());
 	}
 	isNewline(token) {
 		return token.type == "<newline>";
@@ -754,48 +771,29 @@ class boxup_Parser {
 		}
 		return true;
 	}
-	readWhile(compare) {
-		let _g = [];
-		while(!this.isAtEnd() && compare()) _g.push(this.advance());
-		return _g;
-	}
-	consume(type) {
-		if(!this.match(type)) {
-			throw haxe_Exception.thrown(this.error("Expected a " + type,this.peek().pos));
-		}
-	}
 	match(type) {
-		if(this.check(type)) {
+		if(this.tokens[this.position].type == type) {
 			this.advance();
 			return true;
 		}
 		return false;
 	}
-	check(type) {
-		return this.peek().type == type;
-	}
 	checkAny(types) {
 		let _g = 0;
-		while(_g < types.length) if(this.check(types[_g++])) {
+		while(_g < types.length) if(this.tokens[this.position].type == types[_g++]) {
 			return true;
 		}
 		return false;
-	}
-	peek() {
-		return this.tokens[this.position];
-	}
-	previous() {
-		return this.tokens[this.position - 1];
 	}
 	advance() {
 		if(!this.isAtEnd()) {
 			this.position++;
 		}
-		return this.previous();
+		return this.tokens[this.position - 1];
 	}
 	isAtEnd() {
 		if(this.position < this.tokens.length) {
-			return this.peek().type == "<eof>";
+			return this.tokens[this.position].type == "<eof>";
 		} else {
 			return true;
 		}
@@ -947,8 +945,12 @@ class boxup_Scanner {
 		}
 	}
 	isAlpha(c) {
-		if(!(c >= "a" && c <= "z" || c >= "A" && c <= "Z")) {
-			return c == "_";
+		if(!(c >= "a" && c <= "z")) {
+			if(c >= "A") {
+				return c <= "Z";
+			} else {
+				return false;
+			}
 		} else {
 			return true;
 		}
@@ -980,7 +982,12 @@ class boxup_Source {
 	constructor(filename,content) {
 		this.filename = filename;
 		this.content = content;
-		this.tokens = new boxup_Scanner(this).scan();
+	}
+	get_tokens() {
+		if(this._tokens == null) {
+			this._tokens = new boxup_Scanner(this).scan();
+		}
+		return this._tokens;
 	}
 	getLine(lineNumber) {
 		if(lineNumber == 1) {
@@ -989,7 +996,7 @@ class boxup_Source {
 		let line = 1;
 		let index = 0;
 		let tok = null;
-		let toks = boxup_OutcomeTools.sure(this.tokens);
+		let toks = boxup_OutcomeTools.sure(this.get_tokens());
 		let end = toks.length - 1;
 		let min = null;
 		let max = null;
@@ -1024,7 +1031,7 @@ class boxup_Source {
 	}
 	getLineAt(at) {
 		let index = 0;
-		let toks = boxup_OutcomeTools.sure(this.tokens);
+		let toks = boxup_OutcomeTools.sure(this.get_tokens());
 		let end = toks.length - 1;
 		let line = 1;
 		let tok = null;
@@ -1110,6 +1117,24 @@ class boxup_TokenTools {
 	}
 }
 boxup_TokenTools.__name__ = "boxup.TokenTools";
+class boxup_cli_AutoValidator {
+	constructor(manager) {
+		this.manager = manager;
+	}
+	validate(nodes,source) {
+		let _g = this.manager.findDefinition(nodes,source);
+		switch(_g._hx_index) {
+		case 0:
+			return _g.v.validate(nodes,source);
+		case 1:
+			return boxup_Outcome.Ok(nodes);
+		}
+	}
+}
+boxup_cli_AutoValidator.__name__ = "boxup.cli.AutoValidator";
+Object.assign(boxup_cli_AutoValidator.prototype, {
+	__class__: boxup_cli_AutoValidator
+});
 class boxup_cli_DefaultReporter {
 	constructor() {
 	}
@@ -1203,9 +1228,9 @@ class boxup_cli_Definition {
 			return b.name == name;
 		});
 	}
-	validate(nodes) {
+	validate(nodes,source) {
 		let first = nodes[0];
-		return boxup_OutcomeTools.map(this.getBlock("@root").validate(new boxup_Node(boxup_NodeType.Block("@root"),null,null,[],nodes,{ min : 0, max : 0, file : first.pos.file}),this),function(_) {
+		return boxup_OutcomeTools.map(this.getBlock("@root").validate(new boxup_Node(boxup_NodeType.Block("@root"),null,null,null,[],nodes,{ min : 0, max : 0, file : first.pos.file}),this),function(_) {
 			return boxup_Outcome.Ok(nodes);
 		});
 	}
@@ -1215,12 +1240,12 @@ Object.assign(boxup_cli_Definition.prototype, {
 	__class__: boxup_cli_Definition
 });
 class boxup_cli_BlockDefinition {
-	constructor(name,renderHint,kind,children,properties) {
+	constructor(name,meta,kind,children,properties) {
 		this.kind = "Normal";
-		this.renderHint = "Section";
+		this.meta = new haxe_ds_StringMap();
 		this.name = name;
-		if(renderHint != null) {
-			this.renderHint = renderHint;
+		if(meta != null) {
+			this.meta = meta;
 		}
 		if(kind != null) {
 			this.kind = kind;
@@ -1233,6 +1258,16 @@ class boxup_cli_BlockDefinition {
 	}
 	get_isTag() {
 		return this.kind == "Tag";
+	}
+	getIdProperty() {
+		let prop = Lambda.find(this.properties,function(p) {
+			return p.isId;
+		});
+		if(prop != null) {
+			return prop.name;
+		} else {
+			return null;
+		}
 	}
 	validate(node,definition) {
 		let _gthis = this;
@@ -1341,35 +1376,35 @@ class boxup_cli_BlockDefinition {
 	}
 	validateProps(node) {
 		let found = [];
+		let _g = this.getIdProperty();
+		if(_g == null) {
+			if(node.id != null) {
+				throw haxe_Exception.thrown(new boxup_Error("Unexpected id",node.id.pos));
+			}
+		} else {
+			let name = _g;
+			if(!Lambda.exists(node.properties,function(n) {
+				return n.name == name;
+			}) && node.id != null) {
+				node.properties.push({ name : name, value : node.id, pos : node.id.pos});
+			}
+		}
 		let checkForDuplicates = function(prop) {
 			if(found.includes(prop.name)) {
 				throw haxe_Exception.thrown(new boxup_Error("Duplicate property",prop.pos));
 			}
 			found.push(prop.name);
 		};
-		let _g = 0;
-		let _g1 = node.properties;
-		while(_g < _g1.length) {
-			let prop = _g1[_g];
-			++_g;
+		let _g1 = 0;
+		let _g2 = node.properties;
+		while(_g1 < _g2.length) {
+			let prop = _g2[_g1];
+			++_g1;
 			let def = Lambda.find(this.properties,function(p) {
 				return p.name == prop.name;
 			});
 			if(def == null) {
-				let tmp;
-				if(prop.name == "id") {
-					def = Lambda.find(this.properties,function(p) {
-						return p.isId;
-					});
-					tmp = def != null;
-				} else {
-					tmp = false;
-				}
-				if(tmp) {
-					prop.name = def.name;
-				} else {
-					throw haxe_Exception.thrown(new boxup_Error("Invalid property: " + prop.name,prop.pos));
-				}
+				throw haxe_Exception.thrown(new boxup_Error("Invalid property: " + prop.name,prop.pos));
 			}
 			checkForDuplicates(prop);
 			if(prop.value.type != def.type) {
@@ -1379,11 +1414,11 @@ class boxup_cli_BlockDefinition {
 				throw haxe_Exception.thrown(new boxup_Error("Value must be one of: " + def.allowedValues.join(", "),prop.value.pos));
 			}
 		}
-		let _g2 = 0;
-		let _g3 = this.properties;
-		while(_g2 < _g3.length) {
-			let def = _g3[_g2];
-			++_g2;
+		let _g3 = 0;
+		let _g4 = this.properties;
+		while(_g3 < _g4.length) {
+			let def = _g4[_g3];
+			++_g3;
 			if(def.required && !found.includes(def.name)) {
 				throw haxe_Exception.thrown(new boxup_Error("Requires property " + def.name,node.pos));
 			}
@@ -1440,31 +1475,10 @@ boxup_cli_PropertyDefinition.__name__ = "boxup.cli.PropertyDefinition";
 Object.assign(boxup_cli_PropertyDefinition.prototype, {
 	__class__: boxup_cli_PropertyDefinition
 });
-class boxup_cli_DefinitionCompiler {
-	constructor(loader,reporter) {
-		this.loader = loader;
-		this.reporter = reporter;
-		this.compiler = new boxup_Compiler(reporter,new boxup_cli_DefinitionGenerator(),boxup_cli_DefinitionValidator_validator);
-	}
-	load(path) {
-		let _g = this.loader.load(path);
-		switch(_g._hx_index) {
-		case 0:
-			return this.compiler.compile(_g.v);
-		case 1:
-			this.reporter.report([new boxup_Error("File not found: " + path,{ min : 0, max : 0, file : path})],new boxup_Source(path,""));
-			return haxe_ds_Option.None;
-		}
-	}
-}
-boxup_cli_DefinitionCompiler.__name__ = "boxup.cli.DefinitionCompiler";
-Object.assign(boxup_cli_DefinitionCompiler.prototype, {
-	__class__: boxup_cli_DefinitionCompiler
-});
 class boxup_cli_DefinitionGenerator {
 	constructor() {
 	}
-	generate(nodes) {
+	generate(nodes,source) {
 		let blocks = [].concat(boxup_cli_DefinitionGenerator.defaultBlocks);
 		let _g = 0;
 		while(_g < nodes.length) {
@@ -1475,22 +1489,29 @@ class boxup_cli_DefinitionGenerator {
 				switch(_g1.name) {
 				case "Block":
 					let kind = node.getProperty("kind","Normal");
-					let hint = Lambda.find(node.children,function(n) {
-						let _g = n.type;
-						if(_g._hx_index == 0) {
-							if(_g.name == "RenderHint") {
-								return true;
-							} else {
-								return false;
-							}
-						} else {
-							return false;
-						}
-					});
 					let _g2 = node.getProperty("name");
 					let _g3 = kind;
-					let _g4 = hint != null ? hint.getProperty("hint") : "Section";
-					let _g5;
+					let _g4 = new haxe_ds_StringMap();
+					let _g5 = 0;
+					let _this = node.children;
+					let _g6 = [];
+					let _g7 = 0;
+					while(_g7 < _this.length) {
+						let v = _this[_g7];
+						++_g7;
+						let _g = v.type;
+						if(_g._hx_index == 0 && _g.name == "Meta") {
+							_g6.push(v);
+						}
+					}
+					while(_g5 < _g6.length) {
+						let node = _g6[_g5];
+						++_g5;
+						let key = node.getProperty("name");
+						let value = node.getProperty("value");
+						_g4.h[key] = value;
+					}
+					let _g8;
 					if(kind == null) {
 						let _this = node.children;
 						let _g = [];
@@ -1511,7 +1532,7 @@ class boxup_cli_DefinitionGenerator {
 							let n = _g[i];
 							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("symbol"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
 						}
-						_g5 = result;
+						_g8 = result;
 					} else if(kind == "Paragraph") {
 						let _this = node.children;
 						let _g = [];
@@ -1532,7 +1553,7 @@ class boxup_cli_DefinitionGenerator {
 							let n = _g[i];
 							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("symbol"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
 						}
-						_g5 = boxup_cli_DefinitionGenerator.defaultParagraphChildren.concat(result);
+						_g8 = boxup_cli_DefinitionGenerator.defaultParagraphChildren.concat(result);
 					} else {
 						let _this = node.children;
 						let _g = [];
@@ -1553,14 +1574,14 @@ class boxup_cli_DefinitionGenerator {
 							let n = _g[i];
 							result[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("symbol"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
 						}
-						_g5 = result;
+						_g8 = result;
 					}
-					let _this = node.children;
-					let _g6 = [];
-					let _g7 = 0;
-					while(_g7 < _this.length) {
-						let v = _this[_g7];
-						++_g7;
+					let _this1 = node.children;
+					let _g9 = [];
+					let _g10 = 0;
+					while(_g10 < _this1.length) {
+						let v = _this1[_g10];
+						++_g10;
 						let tmp;
 						let _g = v.type;
 						if(_g._hx_index == 0) {
@@ -1575,15 +1596,15 @@ class boxup_cli_DefinitionGenerator {
 							tmp = false;
 						}
 						if(tmp) {
-							_g6.push(v);
+							_g9.push(v);
 						}
 					}
-					let result = new Array(_g6.length);
-					let _g8 = 0;
-					let _g9 = _g6.length;
-					while(_g8 < _g9) {
-						let i = _g8++;
-						let n = _g6[i];
+					let result = new Array(_g9.length);
+					let _g11 = 0;
+					let _g12 = _g9.length;
+					while(_g11 < _g12) {
+						let i = _g11++;
+						let n = _g9[i];
 						let _g = n.getProperty("name");
 						let _g1 = n.getProperty("required") == "true";
 						let _g2 = n.type;
@@ -1620,26 +1641,26 @@ class boxup_cli_DefinitionGenerator {
 						}
 						result[i] = new boxup_cli_PropertyDefinition(_g,_g3,_g1,_g4,tmp);
 					}
-					blocks.push(new boxup_cli_BlockDefinition(_g2,_g4,_g3,_g5,result));
+					blocks.push(new boxup_cli_BlockDefinition(_g2,_g4,_g3,_g8,result));
 					break;
 				case "Root":
-					let _this1 = node.children;
-					let _g10 = [];
-					let _g11 = 0;
-					while(_g11 < _this1.length) {
-						let v = _this1[_g11];
-						++_g11;
+					let _this2 = node.children;
+					let _g13 = [];
+					let _g14 = 0;
+					while(_g14 < _this2.length) {
+						let v = _this2[_g14];
+						++_g14;
 						let _g = v.type;
 						if(_g._hx_index == 0 && _g.name == "Child") {
-							_g10.push(v);
+							_g13.push(v);
 						}
 					}
-					let result1 = new Array(_g10.length);
-					let _g12 = 0;
-					let _g13 = _g10.length;
-					while(_g12 < _g13) {
-						let i = _g12++;
-						let n = _g10[i];
+					let result1 = new Array(_g13.length);
+					let _g15 = 0;
+					let _g16 = _g13.length;
+					while(_g15 < _g16) {
+						let i = _g15++;
+						let n = _g13[i];
 						result1[i] = new boxup_cli_ChildDefinition(n.getProperty("name"),n.getProperty("symbol"),n.getProperty("required","false") == "true",n.getProperty("multiple","true") == "true");
 					}
 					blocks.push(new boxup_cli_BlockDefinition("@root",null,null,result1,[]));
@@ -1655,7 +1676,84 @@ boxup_cli_DefinitionGenerator.__name__ = "boxup.cli.DefinitionGenerator";
 Object.assign(boxup_cli_DefinitionGenerator.prototype, {
 	__class__: boxup_cli_DefinitionGenerator
 });
-class boxup_cli_ResourceLoader {
+class boxup_cli_DefinitionIdResolverCollection {
+	static resolveDefinitionId(this1,nodes,source) {
+		let _g = 0;
+		while(_g < this1.length) {
+			let _g1 = this1[_g++].resolveDefinitionId(nodes,source);
+			switch(_g1._hx_index) {
+			case 0:
+				return haxe_ds_Option.Some(_g1.v);
+			case 1:
+				break;
+			}
+		}
+		return haxe_ds_Option.None;
+	}
+}
+class boxup_cli_DefinitionManager {
+	constructor(resolver,loader,reporter) {
+		this.definitions = new haxe_ds_StringMap();
+		this.resolver = resolver;
+		this.reporter = reporter;
+		this.loader = loader;
+		this.compiler = new boxup_Compiler(reporter,new boxup_cli_DefinitionGenerator(),boxup_cli_DefinitionValidator_validator);
+	}
+	findDefinition(nodes,source) {
+		let _g = boxup_cli_DefinitionIdResolverCollection.resolveDefinitionId(this.resolver,nodes,source);
+		switch(_g._hx_index) {
+		case 0:
+			return this.loadDefinition(_g.v);
+		case 1:
+			return haxe_ds_Option.None;
+		}
+	}
+	loadDefinition(id) {
+		if(Object.prototype.hasOwnProperty.call(this.definitions.h,id)) {
+			return haxe_ds_Option.Some(this.definitions.h[id]);
+		}
+		let _g = boxup_cli_LoaderCollection.load(this.loader,id);
+		switch(_g._hx_index) {
+		case 0:
+			let _g1 = this.compiler.compile(_g.v);
+			switch(_g1._hx_index) {
+			case 0:
+				let _g2 = _g1.v;
+				this.definitions.h[id] = _g2;
+				return haxe_ds_Option.Some(_g2);
+			case 1:
+				return haxe_ds_Option.None;
+			}
+			break;
+		case 1:
+			this.reportNotFound(id);
+			return haxe_ds_Option.None;
+		}
+	}
+	reportNotFound(path) {
+		this.reporter.report([new boxup_Error("Defintion not found: " + path,{ min : 0, max : 0, file : path})],new boxup_Source(path,""));
+	}
+}
+boxup_cli_DefinitionManager.__name__ = "boxup.cli.DefinitionManager";
+Object.assign(boxup_cli_DefinitionManager.prototype, {
+	__class__: boxup_cli_DefinitionManager
+});
+class boxup_cli_LoaderCollection {
+	static load(this1,path) {
+		let _g = 0;
+		while(_g < this1.length) {
+			let _g1 = this1[_g++].load(path);
+			switch(_g1._hx_index) {
+			case 0:
+				return haxe_ds_Option.Some(_g1.v);
+			case 1:
+				break;
+			}
+		}
+		return haxe_ds_Option.None;
+	}
+}
+class boxup_cli_loader_ResourceLoader {
 	constructor() {
 	}
 	load(name) {
@@ -1667,9 +1765,9 @@ class boxup_cli_ResourceLoader {
 		}
 	}
 }
-boxup_cli_ResourceLoader.__name__ = "boxup.cli.ResourceLoader";
-Object.assign(boxup_cli_ResourceLoader.prototype, {
-	__class__: boxup_cli_ResourceLoader
+boxup_cli_loader_ResourceLoader.__name__ = "boxup.cli.loader.ResourceLoader";
+Object.assign(boxup_cli_loader_ResourceLoader.prototype, {
+	__class__: boxup_cli_loader_ResourceLoader
 });
 class capsule_Container {
 	constructor(parent,mappings) {
@@ -1715,13 +1813,6 @@ class capsule_Mapping {
 	constructor(identifier,provider) {
 		this.identifier = identifier;
 		this.provider = provider == null ? capsule_Provider.ProvideNone : provider;
-	}
-	with(cb) {
-		if(this.closure == null) {
-			this.closure = new capsule_Container();
-		}
-		cb(this.closure);
-		return this;
 	}
 	toValue(value) {
 		this.toProvider(capsule_Provider.ProvideValue(value));
@@ -2016,6 +2107,34 @@ class comicbox_Util {
 	}
 }
 comicbox_Util.__name__ = "comicbox.Util";
+class comicbox_boxup_NodeResolver {
+	constructor() {
+	}
+	resolveDefinitionId(nodes,source) {
+		if(nodes.length == 0) {
+			return haxe_ds_Option.None;
+		}
+		let _g = nodes[0].type;
+		if(_g._hx_index == 0) {
+			switch(_g.name) {
+			case "@root":
+				return this.resolveDefinitionId(nodes[0].children,source);
+			case "Comic":
+				return haxe_ds_Option.Some("comic");
+			case "Note":
+				return haxe_ds_Option.Some("note");
+			default:
+				return haxe_ds_Option.None;
+			}
+		} else {
+			return haxe_ds_Option.None;
+		}
+	}
+}
+comicbox_boxup_NodeResolver.__name__ = "comicbox.boxup.NodeResolver";
+Object.assign(comicbox_boxup_NodeResolver.prototype, {
+	__class__: comicbox_boxup_NodeResolver
+});
 class comicbox_boxup_VscodeReporter {
 	constructor(diagnostics) {
 		this.diagnostics = diagnostics;
@@ -2059,91 +2178,24 @@ comicbox_core_PluginModule.__name__ = "comicbox.core.PluginModule";
 Object.assign(comicbox_core_PluginModule.prototype, {
 	__class__: comicbox_core_PluginModule
 });
-class comicbox_definition_ComicboxValidator {
-	constructor(manager) {
-		this.manager = manager;
-	}
-	validate(nodes) {
-		let _g = this.manager.getDefinitionFromNodes(nodes);
-		switch(_g._hx_index) {
-		case 0:
-			return _g.v.validate(nodes);
-		case 1:
-			return boxup_Outcome.Ok(nodes);
-		}
-	}
-}
-comicbox_definition_ComicboxValidator.__name__ = "comicbox.definition.ComicboxValidator";
-Object.assign(comicbox_definition_ComicboxValidator.prototype, {
-	__class__: comicbox_definition_ComicboxValidator
-});
 class comicbox_definition_DefinitionModule {
 	constructor() {
 	}
 	register(container) {
 		let tmp = capsule_Provider.ProvideFactory(function(c) {
-			return new comicbox_definition_DefintionManager(c.getMappingByIdentifier("boxup.Reporter").getValue(c));
+			let reporter = c.getMappingByIdentifier("boxup.Reporter").getValue(c);
+			return new boxup_cli_DefinitionManager([new comicbox_boxup_NodeResolver()],[new boxup_cli_loader_ResourceLoader()],reporter);
 		});
-		container.addMapping(new capsule_Mapping("comicbox.definition.DefintionManager")).toProvider(tmp).asShared();
+		container.addMapping(new capsule_Mapping("boxup.cli.DefinitionManager")).toProvider(tmp).asShared();
 		let tmp1 = capsule_Provider.ProvideFactory(function(c) {
-			return new comicbox_definition_ComicboxValidator(c.getMappingByIdentifier("comicbox.definition.DefintionManager").getValue(c));
+			return new boxup_cli_AutoValidator(c.getMappingByIdentifier("boxup.cli.DefinitionManager").getValue(c));
 		});
-		container.addMapping(new capsule_Mapping("comicbox.definition.ComicboxValidator")).toProvider(tmp1).asShared();
+		container.addMapping(new capsule_Mapping("boxup.Validator")).toProvider(tmp1).asShared();
 	}
 }
 comicbox_definition_DefinitionModule.__name__ = "comicbox.definition.DefinitionModule";
 Object.assign(comicbox_definition_DefinitionModule.prototype, {
 	__class__: comicbox_definition_DefinitionModule
-});
-class comicbox_definition_DefintionManager {
-	constructor(reporter) {
-		this.definitions = new haxe_ds_StringMap();
-		this.reporter = reporter;
-		let loader = new boxup_cli_DefinitionCompiler(new boxup_cli_ResourceLoader(),reporter);
-		let _g = loader.load("comic");
-		switch(_g._hx_index) {
-		case 0:
-			this.definitions.h["comic"] = _g.v;
-			break;
-		case 1:
-			throw new haxe_Exception("Could not load comic definition");
-		}
-		let _g1 = loader.load("note");
-		switch(_g1._hx_index) {
-		case 0:
-			this.definitions.h["note"] = _g1.v;
-			break;
-		case 1:
-			throw new haxe_Exception("Could not load note definition");
-		}
-	}
-	getDefinition(name) {
-		return this.definitions.h[name];
-	}
-	getDefinitionFromNodes(nodes) {
-		if(nodes.length == 0) {
-			return haxe_ds_Option.None;
-		}
-		let _g = nodes[0].type;
-		if(_g._hx_index == 0) {
-			switch(_g.name) {
-			case "@root":
-				return this.getDefinitionFromNodes(nodes[0].children);
-			case "Comic":
-				return haxe_ds_Option.Some(this.getDefinition("comic"));
-			case "Note":
-				return haxe_ds_Option.Some(this.getDefinition("note"));
-			default:
-				return haxe_ds_Option.None;
-			}
-		} else {
-			return haxe_ds_Option.None;
-		}
-	}
-}
-comicbox_definition_DefintionManager.__name__ = "comicbox.definition.DefintionManager";
-Object.assign(comicbox_definition_DefintionManager.prototype, {
-	__class__: comicbox_definition_DefintionManager
 });
 class comicbox_diagnostic_DiagnosticManager {
 	constructor() {
@@ -2251,11 +2303,11 @@ Object.assign(comicbox_diagnostic_DiagnosticModule.prototype, {
 	__class__: comicbox_diagnostic_DiagnosticModule
 });
 class comicbox_document_DocumentManager {
-	constructor(reporter,definitions) {
+	constructor(reporter,manager) {
 		this.events = new vscode_EventEmitter();
 		this.parsedDocuments = new haxe_ds_StringMap();
 		this.reporter = reporter;
-		this.definitions = definitions;
+		this.manager = manager;
 	}
 	register(context) {
 		let _gthis = this;
@@ -2287,26 +2339,25 @@ class comicbox_document_DocumentManager {
 	parseDocument(document) {
 		let _gthis = this;
 		let source = new boxup_Source(document.uri.toString(),document.getText());
-		console.log("src/comicbox/document/DocumentManager.hx:59:",source);
-		let result = boxup_OutcomeTools.map(boxup_OutcomeTools.map(boxup_OutcomeTools.map(source.tokens,function(tokens) {
+		let result = boxup_OutcomeTools.map(boxup_OutcomeTools.map(boxup_OutcomeTools.map(source.get_tokens(),function(tokens) {
 			return new boxup_Parser(tokens).parse();
 		}),function(nodes) {
-			let _g = _gthis.definitions.getDefinitionFromNodes(nodes);
+			let _g = _gthis.manager.findDefinition(nodes,source);
 			switch(_g._hx_index) {
 			case 0:
-				return _g.v.validate(nodes);
+				return _g.v.validate(nodes,source);
 			case 1:
 				return boxup_Outcome.Ok(nodes);
 			}
 		}),function(nodes) {
 			let this1 = _gthis.parsedDocuments;
 			let key = document.uri.toString();
-			this1.h[key] = nodes;
+			this1.h[key] = { nodes : nodes, source : source};
 			return boxup_Outcome.Ok(nodes);
 		});
 		switch(result._hx_index) {
 		case 0:
-			this.events.fire({ doc : document, nodes : result.data});
+			this.events.fire({ doc : document, nodes : result.data, source : source});
 			break;
 		case 1:
 			this.reporter.report(result.error,source);
@@ -2323,7 +2374,7 @@ class comicbox_document_DocumentModule {
 	}
 	register(container) {
 		let tmp = capsule_Provider.ProvideFactory(function(c) {
-			return new comicbox_document_DocumentManager(c.getMappingByIdentifier("boxup.Reporter").getValue(c),c.getMappingByIdentifier("comicbox.definition.DefintionManager").getValue(c));
+			return new comicbox_document_DocumentManager(c.getMappingByIdentifier("boxup.Reporter").getValue(c),c.getMappingByIdentifier("boxup.cli.DefinitionManager").getValue(c));
 		});
 		container.addMapping(new capsule_Mapping("comicbox.document.DocumentManager")).toProvider(tmp).asShared();
 		container.getMappingByIdentifier("comicbox.core.PluginManager").extend(function(manager) {
@@ -2341,7 +2392,7 @@ class comicbox_generator_HtmlGenerator {
 		this.panelCount = 0;
 		this.pageCount = 0;
 	}
-	generate(nodes) {
+	generate(nodes,source) {
 		this.panelCount = 0;
 		this.pageCount = 0;
 		return boxup_Outcome.Ok(this.generateNodes(nodes).join(""));
@@ -2403,8 +2454,8 @@ class comicbox_generator_HtmlGenerator {
 			let _this = node.children;
 			let result = new Array(_this.length);
 			let _g9 = 0;
-			let _g11 = _this.length;
-			while(_g9 < _g11) {
+			let _g10 = _this.length;
+			while(_g9 < _g10) {
 				let i = _g9++;
 				result[i] = this.generateNode(_this[i],false);
 			}
@@ -2430,10 +2481,10 @@ class comicbox_generator_HtmlGenerator {
 			}
 		}
 		let _g1 = [];
-		let _g11 = 0;
-		while(_g11 < _g.length) {
-			let v = _g[_g11];
-			++_g11;
+		let _g2 = 0;
+		while(_g2 < _g.length) {
+			let v = _g[_g2];
+			++_g2;
 			if(v != null) {
 				_g1.push(v);
 			}
@@ -2457,7 +2508,7 @@ class comicbox_generator_PdfGenerator {
 		this.panelCount = 0;
 		this.pageCount = 0;
 	}
-	generate(nodes) {
+	generate(nodes,source) {
 		this.panelCount = 0;
 		this.pageCount = 0;
 		let doc = new PDFDocument({ compress : false, size : "LETTER", margins : { top : 30, left : 20, bottom : 30, right : 20}});
@@ -2480,7 +2531,7 @@ class comicbox_generator_PdfGenerator {
 		switch(_g._hx_index) {
 		case 0:
 			switch(_g.name) {
-			case "@bold":case "@italic":case "@underlined":
+			case "@bold":case "@italic":
 				this.generateNodes(node.children,doc,style);
 				break;
 			case "Attached":
@@ -2526,7 +2577,7 @@ class comicbox_generator_PdfGenerator {
 				switch(_g._hx_index) {
 				case 0:
 					switch(_g.name) {
-					case "@bold":case "@italic":case "@underlined":
+					case "@bold":case "@italic":
 						let _g3 = 0;
 						let _g4 = child.children;
 						while(_g3 < _g4.length) {
@@ -2593,7 +2644,7 @@ class comicbox_preview_PreviewManager {
 		this.generator = generator;
 		this.documents = documents;
 		this.documents.events.event(function(data) {
-			_gthis.updatePreviewForDocument(data.doc,data.nodes);
+			_gthis.updatePreviewForDocument(data.doc,data.nodes,data.source);
 		});
 	}
 	register(context) {
@@ -2606,15 +2657,15 @@ class comicbox_preview_PreviewManager {
 	addPreview(preview) {
 		this.previews.push(preview);
 	}
-	updatePreviewForDocument(document,nodes) {
+	updatePreviewForDocument(document,nodes,source) {
 		let preview = this.getPreviewForDocument(document);
 		if(preview == null) {
 			return;
 		}
-		this.updatePreview(preview,nodes);
+		this.updatePreview(preview,nodes,source);
 	}
-	updatePreview(preview,nodes) {
-		let _g = this.generator.generate(nodes);
+	updatePreview(preview,nodes,source) {
+		let _g = this.generator.generate(nodes,source);
 		switch(_g._hx_index) {
 		case 0:
 			preview.updateHtml(_g.data);
@@ -2646,9 +2697,9 @@ class comicbox_preview_PreviewManager {
 			preview = new comicbox_preview_PreviewPanel(document.uri,this,panel);
 			this.addPreview(preview);
 		}
-		let nodes = this.documents.getDocument(document.uri.toString());
-		if(nodes != null) {
-			this.updatePreview(preview,nodes);
+		let doc = this.documents.getDocument(document.uri.toString());
+		if(doc != null) {
+			this.updatePreview(preview,doc.nodes,doc.source);
 		}
 	}
 }
@@ -2730,15 +2781,6 @@ comicbox_preview_PreviewSerializer.__name__ = "comicbox.preview.PreviewSerialize
 Object.assign(comicbox_preview_PreviewSerializer.prototype, {
 	__class__: comicbox_preview_PreviewSerializer
 });
-class comicbox_render_FileWriter {
-	constructor(config) {
-		this.config = config;
-	}
-}
-comicbox_render_FileWriter.__name__ = "comicbox.render.FileWriter";
-Object.assign(comicbox_render_FileWriter.prototype, {
-	__class__: comicbox_render_FileWriter
-});
 class comicbox_render_RenderCompiler extends boxup_Compiler {
 	constructor(validator) {
 		super(new boxup_cli_DefaultReporter(),new comicbox_generator_PdfGenerator(),validator);
@@ -2749,9 +2791,8 @@ Object.assign(comicbox_render_RenderCompiler.prototype, {
 	__class__: comicbox_render_RenderCompiler
 });
 class comicbox_render_RenderManager {
-	constructor(config,writer,compiler) {
+	constructor(config,compiler) {
 		this.config = config;
-		this.writer = writer;
 		this.compiler = compiler;
 	}
 	register(context) {
@@ -2778,7 +2819,7 @@ class comicbox_render_RenderManager {
 					});
 					fsStream.on("error",function(err) {
 						Vscode.window.showErrorMessage(err.message);
-						console.log("src/comicbox/render/RenderManager.hx:67:",err);
+						console.log("src/comicbox/render/RenderManager.hx:62:",err);
 					});
 					fsStream.on("open",function() {
 						let _g = 0;
@@ -2810,18 +2851,13 @@ class comicbox_render_RenderModule {
 	}
 	register(container) {
 		let tmp = capsule_Provider.ProvideFactory(function(c) {
-			return new comicbox_render_RenderCompiler(c.getMappingByIdentifier("comicbox.definition.ComicboxValidator").getValue(c));
+			return new comicbox_render_RenderCompiler(c.getMappingByIdentifier("boxup.Validator").getValue(c));
 		});
 		container.addMapping(new capsule_Mapping("boxup.Compiler<comicbox.generator.PdfGeneratorStream>")).toProvider(tmp).asShared();
 		let tmp1 = capsule_Provider.ProvideFactory(function(c) {
-			return new comicbox_render_RenderManager(c.getMappingByIdentifier("comicbox.ComicboxConfig").getValue(c),c.getMappingByIdentifier("boxup.cli.Writer").getValue(c),c.getMappingByIdentifier("boxup.Compiler<comicbox.generator.PdfGeneratorStream>").getValue(c));
+			return new comicbox_render_RenderManager(c.getMappingByIdentifier("comicbox.ComicboxConfig").getValue(c),c.getMappingByIdentifier("boxup.Compiler<comicbox.generator.PdfGeneratorStream>").getValue(c));
 		});
-		container.addMapping(new capsule_Mapping("comicbox.render.RenderManager")).toProvider(tmp1).asShared().with(function(c) {
-			let tmp = capsule_Provider.ProvideFactory(function(c) {
-				return new comicbox_render_FileWriter(c.getMappingByIdentifier("comicbox.ComicboxConfig").getValue(c));
-			});
-			c.addMapping(new capsule_Mapping("boxup.cli.Writer")).toProvider(tmp).asShared();
-		});
+		container.addMapping(new capsule_Mapping("comicbox.render.RenderManager")).toProvider(tmp1).asShared();
 		container.getMappingByIdentifier("comicbox.core.PluginManager").extend(function(manager) {
 			manager.add(container.getMappingByIdentifier("comicbox.render.RenderManager").getValue(container));
 			return manager;
@@ -3617,9 +3653,9 @@ if( String.fromCodePoint == null ) String.fromCodePoint = function(c) { return c
 }
 haxe_Resource.content = [{ name : "comic", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPUNvbWljIHJlcXVpcmVkPXRydWUgbXVsdGlwbGU9ZmFsc2VdDQogIFtDaGlsZCBuYW1lPUluZm9dDQogIFtDaGlsZCBuYW1lPVBhZ2VdDQogIFtDaGlsZCBuYW1lPVNjZW5lIHN5bWJvbD0nIyddDQoNCltCbG9jayBuYW1lPUNvbWljXQ0KICBbUHJvcGVydHkgbmFtZT10aXRsZSByZXF1aXJlZD10cnVlXQ0KICBbUHJvcGVydHkgbmFtZT1hdXRob3IgcmVxdWlyZWQ9dHJ1ZV0NCiAgW1Byb3BlcnR5IG5hbWU9dmVyc2lvbiB0eXBlPUludF0NCiAgW1Byb3BlcnR5IG5hbWU9ZGF0ZV0NCiAgW1Byb3BlcnR5IG5hbWU9Zmlyc3RQYWdlTnVtYmVyIHR5cGU9SW50XQ0KICBbRW51bVByb3BlcnR5IG5hbWU9c3RhdHVzIHJlcXVpcmVkPXRydWVdDQogICAgW09wdGlvbiB2YWx1ZT1QdWJsaXNoZWRdDQogICAgW09wdGlvbiB2YWx1ZT1EcmFmdF0NCg0KW0Jsb2NrIG5hbWU9SW5mb10NCiAgW1Byb3BlcnR5IG5hbWU9dGl0bGVdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlzdF0NCg0KW0Jsb2NrIG5hbWU9UGFyYWdyYXBoIGtpbmQ9UGFyYWdyYXBoXQ0KICBbQ2hpbGQgbmFtZT1MaW5rXQ0KDQpbQmxvY2sgbmFtZT1TY2VuZV0NCiAgW0lkUHJvcGVydHkgbmFtZT10aXRsZSByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1QYWdlXQ0KICBbQ2hpbGQgbmFtZT1JbmZvXQ0KICBbQ2hpbGQgbmFtZT1QYW5lbF0NCg0KW0Jsb2NrIG5hbWU9UGFuZWxdDQogIFtDaGlsZCBuYW1lPURpYWxvZyBzeW1ib2w9IkAiXQ0KICBbQ2hpbGQgbmFtZT1TZnggc3ltYm9sPSIhIl0NCiAgW0NoaWxkIG5hbWU9SW5mb10NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0KDQpbQmxvY2sgbmFtZT1EaWFsb2ddDQogIFtJZFByb3BlcnR5IG5hbWU9Y2hhcmFjdGVyIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPW1vZGlmaWVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGggcmVxdWlyZWQ9dHJ1ZV0NCiAgW0NoaWxkIG5hbWU9TW9vZF0NCiAgW0NoaWxkIG5hbWU9QXR0YWNoZWQgc3ltYm9sPSImIl0NCg0KW0Jsb2NrIG5hbWU9U2Z4XQ0KICBbSWRQcm9wZXJ0eSBuYW1lPW5vdGVdDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9TGluayBraW5kPVRhZ10NCiAgW1Byb3BlcnR5IG5hbWU9dXJsIHJlcXVpcmVkPXRydWVdDQoNCltCbG9jayBuYW1lPU1vb2Qga2luZD1UYWddDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9QXR0YWNoZWQga2luZD1UYWddDQogIFtDaGlsZCBuYW1lPVBhcmFncmFwaF0NCg0KW0Jsb2NrIG5hbWU9TGlzdF0NCiAgW0VudW1Qcm9wZXJ0eSBuYW1lPXR5cGVdDQogICAgW09wdGlvbiB2YWx1ZT1PcmRlcmVkXQ0KICAgIFtPcHRpb24gdmFsdWU9VW5vcmRlcmVkXQ0KICBbQ2hpbGQgbmFtZT1JdGVtIHN5bWJvbD0iLSIgcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9SXRlbV0NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0K"},{ name : "note", data : "W1Jvb3RdDQogIFtDaGlsZCBuYW1lPU5vdGUgcmVxdWlyZWQ9dHJ1ZSBtdWx0aXBsZT1mYWxzZV0NCiAgW0NoaWxkIG5hbWU9U2VjdGlvbl0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpbmtdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPU5vdGVdDQogIFtQcm9wZXJ0eSBuYW1lPXRpdGxlIHJlcXVpcmVkPXRydWVdDQogIFtQcm9wZXJ0eSBuYW1lPXZlcnNpb25dDQoNCltCbG9jayBuYW1lPVBhcmFncmFwaCBraW5kPVBhcmFncmFwaF0NCiAgW0NoaWxkIG5hbWU9TGlua10NCiAgW0NoaWxkIG5hbWU9RGV0YWlsXQ0KDQpbQmxvY2sgbmFtZT1MaW5rIGtpbmQ9VGFnXQ0KICBbUHJvcGVydHkgbmFtZT11cmwgcmVxdWlyZWQ9dHJ1ZV0NCg0KW0Jsb2NrIG5hbWU9RGV0YWlsIGtpbmQ9VGFnXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQoNCltCbG9jayBuYW1lPVNlY3Rpb25dDQogIFtQcm9wZXJ0eSBuYW1lPWlkXQ0KICBbUHJvcGVydHkgbmFtZT10aXRsZV0NCiAgW0NoaWxkIG5hbWU9SGVhZGVyXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQogIFtDaGlsZCBuYW1lPUxpc3RdDQoNCltCbG9jayBuYW1lPUhlYWRlciBraW5kPVRhZ10NCiAgW0NoaWxkIG5hbWU9UGFyYWdyYXBoXQ0KDQpbQmxvY2sgbmFtZT1MaXN0XQ0KICBbRW51bVByb3BlcnR5IG5hbWU9dHlwZV0NCiAgICBbT3B0aW9uIHZhbHVlPU9yZGVyZWRdDQogICAgW09wdGlvbiB2YWx1ZT1Vbm9yZGVyZWRdDQogIFtDaGlsZCBuYW1lPUl0ZW0gc3ltYm9sPSItIiByZXF1aXJlZD10cnVlXQ0KDQpbQmxvY2sgbmFtZT1JdGVtXQ0KICBbQ2hpbGQgbmFtZT1QYXJhZ3JhcGhdDQo"}];
 js_Boot.__toStr = ({ }).toString;
-boxup_cli_DefinitionGenerator.defaultParagraphChildren = [new boxup_cli_ChildDefinition("@italic",null,null,null),new boxup_cli_ChildDefinition("@bold",null,null,null),new boxup_cli_ChildDefinition("@underlined",null,null,null),new boxup_cli_ChildDefinition("@raw",null,null,null)];
-boxup_cli_DefinitionGenerator.defaultBlocks = [new boxup_cli_BlockDefinition("@italic",null,"Tag",[],[]),new boxup_cli_BlockDefinition("@bold",null,"Tag",[],[]),new boxup_cli_BlockDefinition("@underlined",null,"Tag",[],[]),new boxup_cli_BlockDefinition("@raw",null,"Tag",[],[])];
-var boxup_cli_DefinitionValidator_validator = new boxup_cli_Definition([new boxup_cli_BlockDefinition("@root",null,null,[new boxup_cli_ChildDefinition("Root",null,true,false),new boxup_cli_ChildDefinition("Block",null,null,null)],[]),new boxup_cli_BlockDefinition("Root",null,null,[new boxup_cli_ChildDefinition("Child",null,null,null)],[]),new boxup_cli_BlockDefinition("Block",null,null,[new boxup_cli_ChildDefinition("Child",null,null,null),new boxup_cli_ChildDefinition("Property",null,null,null),new boxup_cli_ChildDefinition("IdProperty",null,null,false),new boxup_cli_ChildDefinition("EnumProperty",null,null,null),new boxup_cli_ChildDefinition("RenderHint",null,null,false)],[new boxup_cli_PropertyDefinition("kind",null,false,"String",["Tag","Normal","Paragraph"]),new boxup_cli_PropertyDefinition("name",true,true,"String",null)]),new boxup_cli_BlockDefinition("Property",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null),new boxup_cli_PropertyDefinition("type",null,false,"String",["String","Int","Float","Bool"])]),new boxup_cli_BlockDefinition("IdProperty",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null)]),new boxup_cli_BlockDefinition("EnumProperty",null,null,[new boxup_cli_ChildDefinition("Option",null,true,true)],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null)]),new boxup_cli_BlockDefinition("Option",null,null,[],[new boxup_cli_PropertyDefinition("value",null,true,"String",null)]),new boxup_cli_BlockDefinition("Child",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null),new boxup_cli_PropertyDefinition("multiple",null,false,"Bool",null),new boxup_cli_PropertyDefinition("symbol",null,null,"String",["!","@","#","%","$","&","^","-",":","<",">","?","+"])]),new boxup_cli_BlockDefinition("RenderHint",null,null,[],[new boxup_cli_PropertyDefinition("hint",true,true,null,["Header","SubHeader","Section","ListContainer","ListItem","Link","Image"])])]);
+boxup_cli_DefinitionGenerator.defaultParagraphChildren = [new boxup_cli_ChildDefinition("@italic",null,null,null),new boxup_cli_ChildDefinition("@bold",null,null,null),new boxup_cli_ChildDefinition("@raw",null,null,null)];
+boxup_cli_DefinitionGenerator.defaultBlocks = [new boxup_cli_BlockDefinition("@italic",null,"Tag",[],[]),new boxup_cli_BlockDefinition("@bold",null,"Tag",[],[]),new boxup_cli_BlockDefinition("@raw",null,"Tag",[],[])];
+var boxup_cli_DefinitionValidator_validator = new boxup_cli_Definition([new boxup_cli_BlockDefinition("@root",null,null,[new boxup_cli_ChildDefinition("Root",null,true,false),new boxup_cli_ChildDefinition("Block",null,null,null)],[]),new boxup_cli_BlockDefinition("Root",null,null,[new boxup_cli_ChildDefinition("Child",null,null,null)],[]),new boxup_cli_BlockDefinition("Block",null,null,[new boxup_cli_ChildDefinition("Child",null,null,null),new boxup_cli_ChildDefinition("Property",null,null,null),new boxup_cli_ChildDefinition("IdProperty",null,null,false),new boxup_cli_ChildDefinition("EnumProperty",null,null,null),new boxup_cli_ChildDefinition("Meta",null,null,null)],[new boxup_cli_PropertyDefinition("kind",null,false,"String",["Tag","Normal","Paragraph"]),new boxup_cli_PropertyDefinition("name",true,true,"String",null)]),new boxup_cli_BlockDefinition("Property",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null),new boxup_cli_PropertyDefinition("type",null,false,"String",["String","Int","Float","Bool"])]),new boxup_cli_BlockDefinition("IdProperty",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null)]),new boxup_cli_BlockDefinition("EnumProperty",null,null,[new boxup_cli_ChildDefinition("Option",null,true,true)],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("type",null,false,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null)]),new boxup_cli_BlockDefinition("Option",null,null,[],[new boxup_cli_PropertyDefinition("value",null,true,"String",null)]),new boxup_cli_BlockDefinition("Child",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,"String",null),new boxup_cli_PropertyDefinition("required",null,false,"Bool",null),new boxup_cli_PropertyDefinition("multiple",null,false,"Bool",null),new boxup_cli_PropertyDefinition("symbol",null,null,"String",["!","@","#","%","$","&","^","-",":","<",">","?","+","*"])]),new boxup_cli_BlockDefinition("Meta",null,null,[],[new boxup_cli_PropertyDefinition("name",true,true,null,null),new boxup_cli_PropertyDefinition("value",null,true,null,null)])]);
 haxe_crypto_Base64.CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 haxe_crypto_Base64.BYTES = haxe_io_Bytes.ofString(haxe_crypto_Base64.CHARS);
 })(typeof exports != "undefined" ? exports : typeof window != "undefined" ? window : typeof self != "undefined" ? self : this, typeof window != "undefined" ? window : typeof global != "undefined" ? global : typeof self != "undefined" ? self : this);

@@ -1,5 +1,6 @@
 package comicbox.generator;
 
+import boxup.Source;
 import boxup.Outcome;
 import boxup.Node;
 import boxup.Generator;
@@ -13,7 +14,7 @@ class HtmlGenerator implements Generator<String> {
 
   public function new() {}
 
-  public function generate(nodes:Array<Node>):Outcome<String> {
+  public function generate(nodes:Array<Node>, source:Source):Outcome<String> {
     panelCount = 0;
     pageCount = 0;
     var body = generateNodes(nodes);

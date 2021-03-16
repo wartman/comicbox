@@ -12,9 +12,7 @@ class RenderModule implements ServiceProvider {
 
   public function register(container:Container) {
     container.map('Compiler<PdfGeneratorStream>').toShared(RenderCompiler);
-    container.map(RenderManager).toShared(RenderManager).with(c -> {
-      c.map(Writer).toShared(FileWriter);
-    });
+    container.map(RenderManager).toShared(RenderManager);
     container.getMapping(PluginManager).extend(manager -> {
       manager.add(container.get(RenderManager));
       manager;

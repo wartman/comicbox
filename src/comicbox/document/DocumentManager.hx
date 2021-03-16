@@ -8,20 +8,20 @@ import boxup.Reporter;
 import boxup.Source;
 import boxup.Parser;
 import boxup.Node;
+import boxup.cli.DefinitionManager;
 import comicbox.core.Plugin;
-import comicbox.definition.DefintionManager;
 
 using comicbox.Util;
 
 class DocumentManager implements Plugin {
-  final definitions:DefintionManager;
+  final manager:DefinitionManager;
   final reporter:Reporter;
-  final parsedDocuments:Map<String, Array<Node>> = [];
-  public final events:EventEmitter<{ doc:TextDocument, nodes:Array<Node> }> = new EventEmitter();
+  final parsedDocuments:Map<String, ComicboxDocument> = [];
+  public final events:EventEmitter<{ doc:TextDocument, nodes:Array<Node>, source:Source }> = new EventEmitter();
   
-  public function new(reporter, definitions) {
+  public function new(reporter, manager) {
     this.reporter = reporter;
-    this.definitions = definitions;
+    this.manager = manager;
   }
 
   public function register(context:ExtensionContext) {
@@ -42,12 +42,12 @@ class DocumentManager implements Plugin {
     });
   }
 
-  public function getDocument(uri:String) {
+  public function getDocument(uri:String):ComicboxDocument {
     return parsedDocuments.get(uri);
   }
 
-  public function setDocument(uri:String, nodes:Array<Node>) {
-    parsedDocuments.set(uri, nodes);
+  public function setDocument(uri:String, doc:ComicboxDocument) {
+    parsedDocuments.set(uri, doc);
   }
 
   public function removeDocument(uri:String) {
@@ -56,23 +56,27 @@ class DocumentManager implements Plugin {
 
   public function parseDocument(document:TextDocument) {
     var source = new Source(document.uri.toString(), document.getText());
-    trace(source);
     var result = source.tokens
       .map(tokens -> new Parser(tokens).parse())
-      .map(nodes -> switch definitions.getDefinitionFromNodes(nodes) {
-        case None: Ok(nodes);
+      .map(nodes -> switch manager.findDefinition(nodes, source) {
+        case None: 
+          Ok(nodes);
         case Some(def):
-          def.validate(nodes);
+          def.validate(nodes, source);
       })
       .map(nodes -> {
-        parsedDocuments.set(document.uri.toString(), nodes);
+        parsedDocuments.set(document.uri.toString(), {
+          nodes: nodes,
+          source: source
+        });
         Ok(nodes);
       });
     switch result {
       case Ok(nodes):
         events.fire({
           doc: document,
-          nodes: nodes
+          nodes: nodes,
+          source: source
         });
       case Fail(error):
         reporter.report(error, source);
